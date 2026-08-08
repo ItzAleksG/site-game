@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="ru">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    <title>WebRTC Browser Server</title>
+
+    <link rel="stylesheet" href="style.css">
+</head>
+
+<body>
+
+<div class="container">
+
+    <h1>WebRTC Browser Server</h1>
+
+    <div id="modeSelect">
+
+        <h2>Выбери режим</h2>
+
+        <button id="hostButton">
+            Создать комнату
+        </button>
+
+        <button id="joinButton">
+            Подключиться
+        </button>
+
+    </div>
+
+
+    <!-- ================================================= -->
+    <!-- HOST -->
+    <!-- ================================================= -->
+
+    <section id="hostPanel" class="hidden">
+
+        <h2>Хост</h2>
+
+        <div class="info">
+
+            <div>
+                Комната:
+                <strong id="roomId">-</strong>
+            </div>
+
+            <div>
+                Игроков:
+                <strong id="playerCount">1</strong>
+            </div>
+
+        </div>
+
+
+        <h3>Пригласить игрока</h3>
+
+        <button id="createInviteButton">
+            Создать приглашение
+        </button>
+
+
+        <textarea
+            id="inviteLink"
+            readonly
+            placeholder="Здесь появится ссылка приглашения"
+        ></textarea>
+
+
+        <h3>Ответ игрока</h3>
+
+        <textarea
+            id="answerInput"
+            placeholder="Игрок должен отправить сюда свою ссылку ответа"
+        ></textarea>
+
+
+        <button id="acceptAnswerButton">
+            Подключить игрока
+        </button>
+
+
+        <h3>Подключённые игроки</h3>
+
+        <div id="playersList"></div>
+
+    </section>
+
+
+    <!-- ================================================= -->
+    <!-- CLIENT -->
+    <!-- ================================================= -->
+
+    <section id="clientPanel" class="hidden">
+
+        <h2>Подключение к комнате</h2>
+
+        <div id="clientStatus">
+            Подготовка...
+        </div>
+
+
+        <button id="createAnswerButton">
+            Создать ответ
+        </button>
+
+
+        <textarea
+            id="answerLink"
+            readonly
+            placeholder="Здесь появится ссылка, которую нужно отправить хосту"
+        ></textarea>
+
+    </section>
+
+
+    <!-- ================================================= -->
+    <!-- GAME -->
+    <!-- ================================================= -->
+
+    <section id="gamePanel" class="hidden">
+
+        <h2>Игра</h2>
+
+        <div>
+            Ты:
+            <strong id="myId">-</strong>
+        </div>
+
+
+        <div id="game"></div>
+
+
+        <p>
+            WASD / стрелки — движение
+        </p>
+
+
+        <h3>Чат</h3>
+
+        <div id="chat"></div>
+
+
+        <input
+            id="chatInput"
+            placeholder="Сообщение"
+        >
+
+        <button id="chatButton">
+            Отправить
+        </button>
+
+    </section>
+
+</div>
+
+
+<script src="game.js"></script>
+
+</body>
+
+</html>

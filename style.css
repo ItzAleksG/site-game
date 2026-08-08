@@ -1,0 +1,120 @@
+body {
+    font-family: Arial, sans-serif;
+
+    margin: 0;
+
+    background: #f5f5f5;
+}
+
+
+.container {
+    max-width: 900px;
+
+    margin: 40px auto;
+
+    padding: 20px;
+
+    background: white;
+}
+
+
+button {
+    padding: 10px 18px;
+
+    margin: 5px;
+
+    cursor: pointer;
+}
+
+
+textarea {
+    display: block;
+
+    width: 100%;
+
+    box-sizing: border-box;
+
+    min-height: 120px;
+
+    margin: 10px 0;
+
+    font-family: monospace;
+}
+
+
+input {
+    padding: 10px;
+
+    width: 60%;
+}
+
+
+.hidden {
+    display: none;
+}
+
+
+.info {
+    padding: 15px;
+
+    background: #eee;
+
+    margin-bottom: 20px;
+}
+
+
+#game {
+    position: relative;
+
+    width: 700px;
+
+    height: 450px;
+
+    max-width: 100%;
+
+    border: 2px solid #222;
+
+    background: #fafafa;
+
+    overflow: hidden;
+}
+
+
+.player {
+    position: absolute;
+
+    width: 30px;
+
+    height: 30px;
+
+    border-radius: 50%;
+
+    background: #222;
+
+    transform:
+        translate(-50%, -50%);
+
+    transition:
+        left 50ms linear,
+        top 50ms linear;
+}
+
+
+#chat {
+    border: 1px solid #ccc;
+
+    min-height: 120px;
+
+    padding: 10px;
+
+    margin-bottom: 10px;
+
+    overflow-y: auto;
+}
+
+
+.playerEntry {
+    padding: 5px;
+
+    border-bottom: 1px solid #ddd;
+}
