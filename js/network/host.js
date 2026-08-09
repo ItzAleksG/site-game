@@ -1,8 +1,19 @@
+const RTC_CONFIG = {
+    iceServers: [
+        {
+            urls:
+                "stun:stun.l.google.com:19302"
+        }
+    ]
+};
+
+
 export class HostNetwork {
     constructor(
         gameServer,
         {
-            iceServers = []
+            iceServers =
+                RTC_CONFIG.iceServers
         } = {}
     ) {
         if (!gameServer) {
@@ -11,23 +22,29 @@ export class HostNetwork {
             );
         }
 
+
         this.gameServer =
             gameServer;
+
 
         this.iceServers =
             iceServers;
 
+
         /*
-         * Все WebRTC-соединения HOST.
-         *
          * connectionId -> connection
          */
         this.connections =
             new Map();
 
+
         this.nextConnectionId =
             1;
 
+
+        /*
+         * event -> Set<handler>
+         */
         this.handlers =
             new Map();
     }
@@ -39,18 +56,24 @@ export class HostNetwork {
     ============================================================
     */
 
-    on(event, handler) {
+    on(
+        event,
+        handler
+    ) {
         if (
             typeof handler !==
             "function"
         ) {
-            throw new Error(
-                "Handler must be a function."
+            throw new TypeError(
+                "Event handler must be a function."
             );
         }
 
+
         if (
-            !this.handlers.has(event)
+            !this.handlers.has(
+                event
+            )
         ) {
             this.handlers.set(
                 event,
@@ -58,9 +81,11 @@ export class HostNetwork {
             );
         }
 
+
         this.handlers
             .get(event)
             .add(handler);
+
 
         return () => {
             this.off(
@@ -71,20 +96,29 @@ export class HostNetwork {
     }
 
 
-    off(event, handler) {
+    off(
+        event,
+        handler
+    ) {
         const handlers =
-            this.handlers.get(event);
+            this.handlers.get(
+                event
+            );
+
 
         if (!handlers) {
             return;
         }
 
+
         handlers.delete(
             handler
         );
 
+
         if (
-            handlers.size === 0
+            handlers.size ===
+            0
         ) {
             this.handlers.delete(
                 event
@@ -93,13 +127,20 @@ export class HostNetwork {
     }
 
 
-    emit(event, data) {
+    emit(
+        event,
+        data
+    ) {
         const handlers =
-            this.handlers.get(event);
+            this.handlers.get(
+                event
+            );
+
 
         if (!handlers) {
             return;
         }
+
 
         for (
             const handler
@@ -133,21 +174,24 @@ export class HostNetwork {
             );
         }
 
+
         const connection =
             this.createConnection();
 
 
         /*
-         * HOST создаёт DataChannel.
+         * Важно:
          *
-         * Именно этот канал будет использоваться
-         * для всех игровых сообщений.
+         * HOST создаёт DataChannel.
+         * На CLIENT он будет получен
+         * через ondatachannel.
          */
         const channel =
             connection.pc.createDataChannel(
                 "game",
                 {
-                    ordered: true
+                    ordered:
+                        true
                 }
             );
 
@@ -162,18 +206,20 @@ export class HostNetwork {
 
 
         const offer =
-            await connection.pc.createOffer();
+            await connection.pc
+                .createOffer();
 
 
-        await connection.pc.setLocalDescription(
-            offer
-        );
+        await connection.pc
+            .setLocalDescription(
+                offer
+            );
 
 
         /*
-         * Дожидаемся ICE candidates,
-         * чтобы можно было передать
-         * полностью готовый SDP.
+         * Ждём окончания ICE gathering,
+         * чтобы SDP можно было передать
+         * через обычную ссылку.
          */
         await this.waitForIceGathering(
             connection.pc
@@ -184,7 +230,7 @@ export class HostNetwork {
             "waiting-answer";
 
 
-        const localDescription =
+        const description =
             connection.pc
                 .localDescription;
 
@@ -195,10 +241,10 @@ export class HostNetwork {
 
             offer: {
                 type:
-                    localDescription.type,
+                    description.type,
 
                 sdp:
-                    localDescription.sdp
+                    description.sdp
             }
         };
 
@@ -261,34 +307,7 @@ export class HostNetwork {
 
         /*
         --------------------------------------------------------
-        ICE
-        --------------------------------------------------------
-        */
-
-        pc.onicecandidate =
-            event => {
-                if (
-                    !event.candidate
-                ) {
-                    return;
-                }
-
-                this.emit(
-                    "iceCandidate",
-                    {
-                        connectionId:
-                            connection.id,
-
-                        candidate:
-                            event.candidate
-                    }
-                );
-            };
-
-
-        /*
-        --------------------------------------------------------
-        CONNECTION STATE
+        PeerConnection state
         --------------------------------------------------------
         */
 
@@ -316,9 +335,38 @@ export class HostNetwork {
 
 
         /*
-         * Мы сами создаём DataChannel,
-         * поэтому ondatachannel здесь
-         * является защитным механизмом.
+        --------------------------------------------------------
+        ICE
+        --------------------------------------------------------
+        */
+
+        pc.onicecandidate =
+            event => {
+                if (
+                    !event.candidate
+                ) {
+                    return;
+                }
+
+
+                this.emit(
+                    "iceCandidate",
+                    {
+                        connectionId:
+                            connection.id,
+
+                        candidate:
+                            event.candidate
+                    }
+                );
+            };
+
+
+        /*
+         * Мы создаём DataChannel сами.
+         *
+         * ondatachannel нужен только
+         * как защитный механизм.
          */
         pc.ondatachannel =
             event => {
@@ -326,14 +374,13 @@ export class HostNetwork {
                     connection.channel
                 ) {
                     /*
-                     * Если второй канал каким-то образом
-                     * появился, закрываем его.
+                     * Второй канал нам не нужен.
                      */
                     try {
                         event.channel.close();
                     }
                     catch {
-                        // Already closed.
+                        // Ignore.
                     }
 
                     return;
@@ -372,14 +419,15 @@ export class HostNetwork {
         }
 
 
-        /*
-         * Не устанавливаем никаких
-         * GameServer-обработчиков напрямую
-         * поверх канала кроме этого одного.
-         */
         channel.binaryType =
             "arraybuffer";
 
+
+        /*
+        --------------------------------------------------------
+        OPEN
+        --------------------------------------------------------
+        */
 
         channel.onopen =
             () => {
@@ -404,15 +452,17 @@ export class HostNetwork {
             };
 
 
+        /*
+        --------------------------------------------------------
+        MESSAGE
+        --------------------------------------------------------
+        */
+
         channel.onmessage =
             event => {
                 /*
-                 * ЕДИНСТВЕННАЯ точка входа
-                 * сообщений игрока.
-                 *
-                 * HostNetwork передаёт
-                 * сообщение авторитетному
-                 * GameServer.
+                 * GameServer — единственное место,
+                 * где разбираются игровые сообщения.
                  */
                 this.gameServer.receive(
                     connection,
@@ -421,6 +471,12 @@ export class HostNetwork {
             };
 
 
+        /*
+        --------------------------------------------------------
+        CLOSE
+        --------------------------------------------------------
+        */
+
         channel.onclose =
             () => {
                 this.handleChannelClose(
@@ -428,6 +484,12 @@ export class HostNetwork {
                 );
             };
 
+
+        /*
+        --------------------------------------------------------
+        ERROR
+        --------------------------------------------------------
+        */
 
         channel.onerror =
             error => {
@@ -450,7 +512,121 @@ export class HostNetwork {
 
     /*
     ============================================================
-    GAME SERVER -> PLAYER
+    ACCEPT ANSWER
+    ============================================================
+    */
+
+    async acceptAnswer(
+        answer,
+        connectionId = null
+    ) {
+        let connection;
+
+
+        if (connectionId) {
+            connection =
+                this.connections.get(
+                    connectionId
+                );
+        }
+        else {
+            connection =
+                this.findWaitingConnection();
+        }
+
+
+        if (!connection) {
+            throw new Error(
+                "No waiting WebRTC connection found."
+            );
+        }
+
+
+        if (
+            connection.state !==
+                "waiting-answer"
+        ) {
+            throw new Error(
+                "Connection is not waiting for an answer."
+            );
+        }
+
+
+        if (
+            !answer ||
+            typeof answer !==
+                "object"
+        ) {
+            throw new Error(
+                "Invalid WebRTC answer."
+            );
+        }
+
+
+        await connection.pc
+            .setRemoteDescription(
+                new RTCSessionDescription(
+                    answer
+                )
+            );
+
+
+        connection.state =
+            "connecting";
+
+
+        this.emit(
+            "answerAccepted",
+            {
+                connection,
+                answer
+            }
+        );
+
+
+        return connection;
+    }
+
+
+    /*
+    ============================================================
+    FIND WAITING CONNECTION
+    ============================================================
+    */
+
+    findWaitingConnection() {
+        const connections =
+            [
+                ...this.connections.values()
+            ];
+
+
+        for (
+            let i =
+                connections.length - 1;
+            i >= 0;
+            i--
+        ) {
+            const connection =
+                connections[i];
+
+
+            if (
+                connection.state ===
+                "waiting-answer"
+            ) {
+                return connection;
+            }
+        }
+
+
+        return null;
+    }
+
+
+    /*
+    ============================================================
+    SEND
     ============================================================
     */
 
@@ -485,14 +661,30 @@ export class HostNetwork {
         }
         catch (error) {
             console.error(
-                "Failed to send WebRTC message:",
+                "HostNetwork.send failed:",
                 error
             );
+
+
+            this.emit(
+                "error",
+                {
+                    connection,
+                    error
+                }
+            );
+
 
             return false;
         }
     }
 
+
+    /*
+    ============================================================
+    SEND TO PLAYER
+    ============================================================
+    */
 
     sendToPlayer(
         playerId,
@@ -515,6 +707,12 @@ export class HostNetwork {
         );
     }
 
+
+    /*
+    ============================================================
+    BROADCAST
+    ============================================================
+    */
 
     broadcast(
         message,
@@ -553,104 +751,7 @@ export class HostNetwork {
 
     /*
     ============================================================
-    ACCEPT ANSWER
-    ============================================================
-    */
-
-    async acceptAnswer(
-        answer,
-        connectionId = null
-    ) {
-        const connection =
-            connectionId
-                ? this.connections.get(
-                    connectionId
-                )
-                : this.findWaitingConnection();
-
-
-        if (!connection) {
-            throw new Error(
-                "No WebRTC connection found."
-            );
-        }
-
-
-        if (
-            connection.state !==
-                "waiting-answer" &&
-            connection.state !==
-                "connecting"
-        ) {
-            throw new Error(
-                "Connection is not waiting for an answer."
-            );
-        }
-
-
-        if (
-            !answer ||
-            typeof answer !==
-                "object"
-        ) {
-            throw new Error(
-                "Invalid WebRTC answer."
-            );
-        }
-
-
-        await connection.pc.setRemoteDescription(
-            new RTCSessionDescription(
-                answer
-            )
-        );
-
-
-        connection.state =
-            "connecting";
-
-
-        this.emit(
-            "answerAccepted",
-            {
-                connection,
-                answer
-            }
-        );
-
-
-        return connection;
-    }
-
-
-    /*
-    ============================================================
-    FIND WAITING CONNECTION
-    ============================================================
-    */
-
-    findWaitingConnection() {
-        const connections =
-            [
-                ...this.connections.values()
-            ]
-                .reverse();
-
-
-        return (
-            connections.find(
-                connection =>
-                    connection.state ===
-                    "waiting-answer"
-            ) ||
-            null
-        );
-    }
-
-
-    /*
-    ============================================================
-    FIND CONNECTION
+    CONNECTION LOOKUP
     ============================================================
     */
 
@@ -686,6 +787,29 @@ export class HostNetwork {
     }
 
 
+    getConnections() {
+        return [
+            ...this.connections.values()
+        ];
+    }
+
+
+    getConnectedConnections() {
+        return this
+            .getConnections()
+            .filter(
+                connection =>
+                    connection.state ===
+                    "connected"
+            );
+    }
+
+
+    getConnectionCount() {
+        return this.connections.size;
+    }
+
+
     /*
     ============================================================
     ICE
@@ -697,7 +821,7 @@ export class HostNetwork {
         candidate
     ) {
         const connection =
-            this.connections.get(
+            this.getConnection(
                 connectionId
             );
 
@@ -714,26 +838,10 @@ export class HostNetwork {
         }
 
 
-        try {
-            await connection.pc.addIceCandidate(
+        await connection.pc
+            .addIceCandidate(
                 candidate
             );
-        }
-        catch (error) {
-            console.error(
-                "Failed to add ICE candidate:",
-                error
-            );
-
-
-            this.emit(
-                "error",
-                {
-                    connection,
-                    error
-                }
-            );
-        }
     }
 
 
@@ -828,14 +936,6 @@ export class HostNetwork {
     handleConnectionState(
         connection
     ) {
-        if (
-            !connection ||
-            !connection.pc
-        ) {
-            return;
-        }
-
-
         const state =
             connection.pc
                 .connectionState;
@@ -874,17 +974,6 @@ export class HostNetwork {
     handleChannelClose(
         connection
     ) {
-        if (!connection) {
-            return;
-        }
-
-
-        /*
-         * Если канал закрылся, игрок больше
-         * не может отправлять INPUT.
-         *
-         * Удаляем connection.
-         */
         this.removeConnection(
             connection
         );
@@ -920,30 +1009,18 @@ export class HostNetwork {
 
 
         /*
-         * Если GameServer уже знает
-         * playerId, сообщаем ему
-         * о выходе игрока.
+         * Если игрок уже зарегистрировался,
+         * GameServer удалит его из мира.
          */
         if (
             connection.playerId
         ) {
-            try {
-                this.gameServer.disconnect(
-                    connection
-                );
-            }
-            catch (error) {
-                console.error(
-                    "GameServer disconnect failed:",
-                    error
-                );
-            }
+            this.gameServer.disconnect(
+                connection
+            );
         }
 
 
-        /*
-         * Закрываем канал.
-         */
         try {
             if (
                 connection.channel &&
@@ -954,13 +1031,10 @@ export class HostNetwork {
             }
         }
         catch {
-            // Already closed.
+            // Ignore.
         }
 
 
-        /*
-         * Закрываем PeerConnection.
-         */
         try {
             if (
                 connection.pc &&
@@ -971,7 +1045,7 @@ export class HostNetwork {
             }
         }
         catch {
-            // Already closed.
+            // Ignore.
         }
 
 
@@ -988,36 +1062,7 @@ export class HostNetwork {
 
     /*
     ============================================================
-    CONNECTION LIST
-    ============================================================
-    */
-
-    getConnections() {
-        return [
-            ...this.connections.values()
-        ];
-    }
-
-
-    getConnectedConnections() {
-        return this
-            .getConnections()
-            .filter(
-                connection =>
-                    connection.state ===
-                    "connected"
-            );
-    }
-
-
-    getConnectionCount() {
-        return this.connections.size;
-    }
-
-
-    /*
-    ============================================================
-    CLOSE EVERYTHING
+    CLOSE
     ============================================================
     */
 
