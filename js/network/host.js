@@ -1,9 +1,3 @@
-import {
-    makeMessage,
-    MESSAGE
-} from "./protocol.js";
-
-
 const RTC_CONFIG = {
 
     iceServers: [
@@ -20,9 +14,7 @@ const RTC_CONFIG = {
 
 export class HostNetwork {
 
-    constructor(
-        gameServer
-    ) {
+    constructor(gameServer) {
 
         this.gameServer =
             gameServer;
@@ -54,7 +46,9 @@ export class HostNetwork {
 
             channel,
 
-            playerId: null
+            playerId: null,
+
+            state: "waiting"
 
         };
 
@@ -64,11 +58,26 @@ export class HostNetwork {
         );
 
 
+        /*
+         * Передаём connection
+         * игровому серверу.
+         */
+
+        this.gameServer
+            .addConnection(
+                connection
+            );
+
+
         channel.onopen =
             () => {
 
+                connection.state =
+                    "connected";
+
+
                 console.log(
-                    "Player connection opened"
+                    "Player connected"
                 );
 
             };
@@ -77,17 +86,10 @@ export class HostNetwork {
         channel.onclose =
             () => {
 
-                this.connections.delete(
-                    connection
-                );
+                connection.state =
+                    "closed";
 
             };
-
-
-        this.gameServer
-            .addConnection(
-                connection
-            );
 
 
         const offer =
@@ -117,13 +119,11 @@ export class HostNetwork {
     }
 
 
-    async acceptAnswer(
-        answer
-    ) {
+    async acceptAnswer(answer) {
 
         /*
-         * Находим последнюю connection,
-         * которая ещё не получила answer.
+         * Ищем последнее соединение,
+         * которому ещё не дали answer.
          */
 
         const pending =
@@ -139,7 +139,7 @@ export class HostNetwork {
         if (!pending) {
 
             throw new Error(
-                "Нет ожидающего подключения"
+                "Нет ожидающего подключения. Создай новое приглашение."
             );
 
         }
@@ -154,14 +154,16 @@ export class HostNetwork {
 
             );
 
+
+        pending.state =
+            "answer-received";
+
     }
 
 }
 
 
-function waitForIceGatheringComplete(
-    pc
-) {
+function waitForIceGatheringComplete(pc) {
 
     if (
         pc.iceGatheringState ===
@@ -176,7 +178,7 @@ function waitForIceGatheringComplete(
     return new Promise(
         resolve => {
 
-            function check() {
+            const check = () => {
 
                 if (
                     pc.iceGatheringState ===
@@ -193,7 +195,7 @@ function waitForIceGatheringComplete(
 
                 }
 
-            }
+            };
 
 
             pc.addEventListener(
