@@ -96,27 +96,3 @@ export function addChatMessage(
         chat.scrollHeight;
 
 }
-
-
-export function getChatText() {
-
-    const input =
-        document.getElementById(
-            "chatMessage"
-        );
-
-
-    return input.value.trim();
-
-}
-
-
-export function clearChatText() {
-
-    document
-        .getElementById(
-            "chatMessage"
-        )
-        .value = "";
-
-}
