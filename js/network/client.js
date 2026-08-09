@@ -5,59 +5,78 @@ import {
 } from "./protocol.js";
 
 
+const RTC_CONFIG = {
+    iceServers: [
+        {
+            urls:
+                "stun:stun.l.google.com:19302"
+        }
+    ]
+};
+
+
 export class ClientNetwork {
-    constructor({
-        iceServers = []
-    } = {}) {
+    constructor(
+        {
+            iceServers =
+                RTC_CONFIG.iceServers
+        } = {}
+    ) {
         this.iceServers =
             iceServers;
 
-        this.pc = null;
 
-        this.channel = null;
+        this.pc =
+            null;
 
-        this.playerId = null;
 
-        this.roomCode = null;
+        this.channel =
+            null;
 
-        this.handlers = new Map();
 
-        this.connected = false;
+        this.playerId =
+            null;
 
-        this.remoteDescriptionSet =
-            false;
 
-        this.pendingCandidates = [];
-
-        this.disconnectNotified =
-            false;
+        /*
+         * event -> Set<handler>
+         */
+        this.handlers =
+            new Map();
     }
 
 
     /*
     ============================================================
-    EVENT SYSTEM
+    EVENTS
     ============================================================
     */
 
-    on(event, handler) {
+    on(
+        event,
+        handler
+    ) {
         if (
             typeof handler !==
             "function"
         ) {
-            throw new Error(
-                "Handler must be a function."
+            throw new TypeError(
+                "Event handler must be a function."
             );
         }
 
+
         if (
-            !this.handlers.has(event)
+            !this.handlers.has(
+                event
+            )
         ) {
             this.handlers.set(
                 event,
                 new Set()
             );
         }
+
 
         this.handlers
             .get(event)
@@ -73,18 +92,29 @@ export class ClientNetwork {
     }
 
 
-    off(event, handler) {
+    off(
+        event,
+        handler
+    ) {
         const handlers =
-            this.handlers.get(event);
+            this.handlers.get(
+                event
+            );
+
 
         if (!handlers) {
             return;
         }
 
-        handlers.delete(handler);
+
+        handlers.delete(
+            handler
+        );
+
 
         if (
-            handlers.size === 0
+            handlers.size ===
+            0
         ) {
             this.handlers.delete(
                 event
@@ -93,13 +123,20 @@ export class ClientNetwork {
     }
 
 
-    emit(event, data) {
+    emit(
+        event,
+        data
+    ) {
         const handlers =
-            this.handlers.get(event);
+            this.handlers.get(
+                event
+            );
+
 
         if (!handlers) {
             return;
         }
+
 
         for (
             const handler
@@ -110,7 +147,7 @@ export class ClientNetwork {
             }
             catch (error) {
                 console.error(
-                    `Error in "${event}" handler:`,
+                    `ClientNetwork "${event}" handler failed:`,
                     error
                 );
             }
@@ -124,16 +161,26 @@ export class ClientNetwork {
     ============================================================
     */
 
-    async connect(offer) {
-        this.close();
+    async connect(
+        offer
+    ) {
+        if (
+            this.pc
+        ) {
+            this.close();
+        }
 
-        this.disconnectNotified =
-            false;
 
-        this.remoteDescriptionSet =
-            false;
+        if (
+            !offer ||
+            typeof offer !==
+                "object"
+        ) {
+            throw new Error(
+                "Invalid WebRTC offer."
+            );
+        }
 
-        this.pendingCandidates = [];
 
         this.pc =
             new RTCPeerConnection({
@@ -142,93 +189,147 @@ export class ClientNetwork {
             });
 
 
-        this.setupPeerConnection();
+        /*
+        --------------------------------------------------------
+        CONNECTION STATE
+        --------------------------------------------------------
+        */
+
+        this.pc.onconnectionstatechange =
+            () => {
+                const state =
+                    this.pc
+                        .connectionState;
 
 
-        await this.pc.setRemoteDescription(
-            new RTCSessionDescription(
-                offer
-            )
-        );
-
-
-        this.remoteDescriptionSet =
-            true;
-
-
-        await this.flushPendingCandidates();
-
-
-        const answer =
-            await this.pc.createAnswer();
-
-
-        await this.pc.setLocalDescription(
-            answer
-        );
-
-
-        await this.waitForIceGathering();
-
-
-        return {
-            type:
-                this.pc.localDescription.type,
-
-            sdp:
-                this.pc.localDescription.sdp
-        };
-    }
-
-
-    /*
-    ============================================================
-    PEER CONNECTION
-    ============================================================
-    */
-
-    setupPeerConnection() {
-        this.pc.ondatachannel =
-            event => {
-
-                const channel =
-                    event.channel;
-
-                this.setupDataChannel(
-                    channel
+                this.emit(
+                    "connectionStateChange",
+                    state
                 );
-            };
 
-
-        this.pc.onicecandidate =
-            event => {
 
                 if (
-                    event.candidate
+                    state ===
+                        "failed" ||
+                    state ===
+                        "closed"
                 ) {
                     this.emit(
-                        "iceCandidate",
-                        event.candidate
+                        "disconnected"
                     );
                 }
             };
 
 
-        this.pc.onconnectionstatechange =
-            () => {
+        /*
+        --------------------------------------------------------
+        ICE
+        --------------------------------------------------------
+        */
 
-                this.handleConnectionState();
-            };
+        this.pc.onicecandidate =
+            event => {
+                if (
+                    !event.candidate
+                ) {
+                    return;
+                }
 
-
-        this.pc.oniceconnectionstatechange =
-            () => {
 
                 this.emit(
-                    "iceConnectionStateChange",
-                    this.pc.iceConnectionState
+                    "iceCandidate",
+                    event.candidate
                 );
             };
+
+
+        /*
+        --------------------------------------------------------
+        DATA CHANNEL
+        --------------------------------------------------------
+        */
+
+        this.pc.ondatachannel =
+            event => {
+                /*
+                 * У нас должен быть
+                 * только один игровой канал.
+                 */
+                if (
+                    this.channel
+                ) {
+                    try {
+                        event.channel.close();
+                    }
+                    catch {
+                        // Ignore.
+                    }
+
+                    return;
+                }
+
+
+                this.channel =
+                    event.channel;
+
+
+                this.setupChannel();
+            };
+
+
+        /*
+        --------------------------------------------------------
+        REMOTE OFFER
+        --------------------------------------------------------
+        */
+
+        await this.pc
+            .setRemoteDescription(
+                new RTCSessionDescription(
+                    offer
+                )
+            );
+
+
+        /*
+        --------------------------------------------------------
+        ANSWER
+        --------------------------------------------------------
+        */
+
+        const answer =
+            await this.pc
+                .createAnswer();
+
+
+        await this.pc
+            .setLocalDescription(
+                answer
+            );
+
+
+        /*
+        --------------------------------------------------------
+        ICE GATHERING
+        --------------------------------------------------------
+        */
+
+        await waitForIceGatheringComplete(
+            this.pc
+        );
+
+
+        const description =
+            this.pc.localDescription;
+
+
+        return {
+            type:
+                description.type,
+
+            sdp:
+                description.sdp
+        };
     }
 
 
@@ -238,53 +339,47 @@ export class ClientNetwork {
     ============================================================
     */
 
-    setupDataChannel(channel) {
-        this.channel =
-            channel;
+    setupChannel() {
+        if (!this.channel) {
+            return;
+        }
 
 
-        channel.binaryType =
+        this.channel.binaryType =
             "arraybuffer";
 
 
-        channel.onopen =
+        this.channel.onopen =
             () => {
-
-                this.connected =
-                    true;
-
-                this.disconnectNotified =
-                    false;
-
                 this.emit(
                     "connected"
                 );
             };
 
 
-        channel.onmessage =
+        this.channel.onmessage =
             event => {
-
                 this.handleMessage(
                     event.data
                 );
             };
 
 
-        channel.onclose =
+        this.channel.onclose =
             () => {
-
-                this.handleDisconnect();
+                this.emit(
+                    "disconnected"
+                );
             };
 
 
-        channel.onerror =
+        this.channel.onerror =
             error => {
-
                 console.error(
-                    "Data channel error:",
+                    "Client DataChannel error:",
                     error
                 );
+
 
                 this.emit(
                     "error",
@@ -296,91 +391,60 @@ export class ClientNetwork {
 
     /*
     ============================================================
-    MESSAGES
+    MESSAGE
     ============================================================
     */
 
-    handleMessage(raw) {
+    handleMessage(
+        raw
+    ) {
         const message =
-            parseMessage(raw);
+            parseMessage(
+                raw
+            );
+
 
         if (!message) {
+            this.emit(
+                "error",
+                new Error(
+                    "Received invalid server message."
+                )
+            );
+
             return;
         }
 
 
+        /*
+         * Сохраняем playerId,
+         * когда сервер присылает WELCOME.
+         */
         if (
             message.type ===
             MESSAGE.WELCOME
         ) {
             this.playerId =
                 message.playerId;
-
-            this.roomCode =
-                message.roomCode;
         }
 
 
+        /*
+         * Событие по конкретному
+         * типу сообщения.
+         */
         this.emit(
             message.type,
             message
         );
 
 
+        /*
+         * Универсальное событие.
+         */
         this.emit(
             "message",
             message
-        );
-    }
-
-
-    /*
-    ============================================================
-    JOIN
-    ============================================================
-    */
-
-    join(name) {
-        this.send(
-            makeMessage(
-                MESSAGE.JOIN,
-                {
-                    name
-                }
-            )
-        );
-    }
-
-
-    /*
-    ============================================================
-    INPUT
-    ============================================================
-    */
-
-    move(dx, dy) {
-        this.send(
-            makeMessage(
-                MESSAGE.INPUT,
-                {
-                    action:
-                        "move",
-
-                    dx,
-
-                    dy
-                }
-            )
-        );
-    }
-
-
-    sendInput(input) {
-        this.send(
-            makeMessage(
-                MESSAGE.INPUT,
-                input
-            )
         );
     }
 
@@ -391,7 +455,10 @@ export class ClientNetwork {
     ============================================================
     */
 
-    send(message) {
+    sendMessage(
+        type,
+        data = {}
+    ) {
         if (
             !this.channel ||
             this.channel.readyState !==
@@ -403,16 +470,27 @@ export class ClientNetwork {
 
         try {
             this.channel.send(
-                message
+                makeMessage(
+                    type,
+                    data
+                )
             );
+
 
             return true;
         }
         catch (error) {
             console.error(
-                "Failed to send message:",
+                "ClientNetwork.sendMessage failed:",
                 error
             );
+
+
+            this.emit(
+                "error",
+                error
+            );
+
 
             return false;
         }
@@ -421,204 +499,69 @@ export class ClientNetwork {
 
     /*
     ============================================================
-    CONNECTION STATE
+    JOIN
     ============================================================
     */
 
-    handleConnectionState() {
-        if (!this.pc) {
-            return;
-        }
-
-
-        const state =
-            this.pc.connectionState;
-
-
-        this.emit(
-            "connectionStateChange",
-            state
-        );
-
-
-        if (
-            state === "connected"
-        ) {
-            return;
-        }
-
-
-        if (
-            state === "failed" ||
-            state === "disconnected" ||
-            state === "closed"
-        ) {
-            this.handleDisconnect();
-        }
-    }
-
-
-    handleDisconnect() {
-        if (
-            this.disconnectNotified
-        ) {
-            return;
-        }
-
-
-        this.disconnectNotified =
-            true;
-
-        this.connected =
-            false;
-
-
-        this.emit(
-            "disconnected"
+    join(
+        name
+    ) {
+        return this.sendMessage(
+            MESSAGE.JOIN,
+            {
+                name:
+                    sanitizeName(
+                        name
+                    )
+            }
         );
     }
 
 
     /*
     ============================================================
-    ICE
+    MOVEMENT
     ============================================================
     */
 
-    async waitForIceGathering(
-        timeout = 5000
+    move(
+        dx,
+        dy
     ) {
-        if (!this.pc) {
-            return;
-        }
+        return this.sendMessage(
+            MESSAGE.INPUT,
+            {
+                action:
+                    "move",
 
+                dx:
+                    normalizeDirection(
+                        dx
+                    ),
 
-        if (
-            this.pc.iceGatheringState ===
-            "complete"
-        ) {
-            return;
-        }
-
-
-        await new Promise(
-            resolve => {
-
-                let finished =
-                    false;
-
-
-                const finish = () => {
-
-                    if (finished) {
-                        return;
-                    }
-
-                    finished =
-                        true;
-
-                    clearTimeout(
-                        timer
-                    );
-
-                    this.pc.removeEventListener(
-                        "icegatheringstatechange",
-                        check
-                    );
-
-                    resolve();
-                };
-
-
-                const check = () => {
-
-                    if (
-                        this.pc
-                            .iceGatheringState ===
-                        "complete"
-                    ) {
-                        finish();
-                    }
-                };
-
-
-                const timer =
-                    setTimeout(
-                        finish,
-                        timeout
-                    );
-
-
-                this.pc.addEventListener(
-                    "icegatheringstatechange",
-                    check
-                );
-
-
-                check();
+                dy:
+                    normalizeDirection(
+                        dy
+                    )
             }
         );
     }
 
 
-    async addIceCandidate(
-        candidate
-    ) {
-        if (!this.pc) {
-            return;
-        }
+    /*
+    ============================================================
+    PING
+    ============================================================
+    */
 
-
-        if (
-            !this.remoteDescriptionSet
-        ) {
-            this.pendingCandidates.push(
-                candidate
-            );
-
-            return;
-        }
-
-
-        try {
-            await this.pc.addIceCandidate(
-                candidate
-            );
-        }
-        catch (error) {
-            console.error(
-                "Failed to add ICE candidate:",
-                error
-            );
-        }
-    }
-
-
-    async flushPendingCandidates() {
-        if (
-            !this.pc ||
-            !this.remoteDescriptionSet
-        ) {
-            return;
-        }
-
-
-        const candidates =
-            this.pendingCandidates;
-
-
-        this.pendingCandidates =
-            [];
-
-
-        for (
-            const candidate
-            of candidates
-        ) {
-            await this.addIceCandidate(
-                candidate
-            );
-        }
+    ping() {
+        return this.sendMessage(
+            MESSAGE.PING,
+            {
+                time:
+                    Date.now()
+            }
+        );
     }
 
 
@@ -629,38 +572,26 @@ export class ClientNetwork {
     */
 
     close() {
-        this.connected =
-            false;
-
-        this.playerId =
-            null;
-
-        this.roomCode =
-            null;
-
-        this.remoteDescriptionSet =
-            false;
-
-        this.pendingCandidates =
-            [];
-
-
-        if (this.channel) {
+        if (
+            this.channel
+        ) {
             try {
                 this.channel.close();
             }
             catch {
-                // Already closed.
+                // Ignore.
             }
         }
 
 
-        if (this.pc) {
+        if (
+            this.pc
+        ) {
             try {
                 this.pc.close();
             }
             catch {
-                // Already closed.
+                // Ignore.
             }
         }
 
@@ -668,7 +599,153 @@ export class ClientNetwork {
         this.channel =
             null;
 
+
         this.pc =
             null;
+
+
+        this.playerId =
+            null;
     }
+}
+
+
+/*
+============================================================
+HELPERS
+============================================================
+*/
+
+function sanitizeName(
+    name
+) {
+    const value =
+        String(
+            name ?? ""
+        )
+        .trim()
+        .replace(
+            /\s+/g,
+            " "
+        )
+        .slice(
+            0,
+            24
+        );
+
+
+    return (
+        value ||
+        "Player"
+    );
+}
+
+
+function normalizeDirection(
+    value
+) {
+    const number =
+        Number(value);
+
+
+    if (
+        !Number.isFinite(
+            number
+        )
+    ) {
+        return 0;
+    }
+
+
+    if (
+        number > 0
+    ) {
+        return 1;
+    }
+
+
+    if (
+        number < 0
+    ) {
+        return -1;
+    }
+
+
+    return 0;
+}
+
+
+function waitForIceGatheringComplete(
+    pc,
+    timeout = 5000
+) {
+    if (
+        pc.iceGatheringState ===
+        "complete"
+    ) {
+        return Promise.resolve();
+    }
+
+
+    return new Promise(
+        resolve => {
+            let finished =
+                false;
+
+
+            const finish =
+                () => {
+                    if (
+                        finished
+                    ) {
+                        return;
+                    }
+
+
+                    finished =
+                        true;
+
+
+                    clearTimeout(
+                        timer
+                    );
+
+
+                    pc.removeEventListener(
+                        "icegatheringstatechange",
+                        check
+                    );
+
+
+                    resolve();
+                };
+
+
+            const check =
+                () => {
+                    if (
+                        pc.iceGatheringState ===
+                        "complete"
+                    ) {
+                        finish();
+                    }
+                };
+
+
+            const timer =
+                setTimeout(
+                    finish,
+                    timeout
+                );
+
+
+            pc.addEventListener(
+                "icegatheringstatechange",
+                check
+            );
+
+
+            check();
+        }
+    );
 }
