@@ -219,24 +219,22 @@ export class ClientNetwork {
     }
 
 
-    join(
-        name
-    ) {
+    join(name) {
 
-        this.send({
+    this.send({
 
-            type:
-                MESSAGE.JOIN,
+        type:
+            MESSAGE.JOIN,
 
-            data: {
+        data: {
 
-                name
+            name
 
-            }
+        }
 
-        });
+    });
 
-    }
+}
 
 
     move(
