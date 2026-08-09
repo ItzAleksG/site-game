@@ -23,6 +23,7 @@ export function showHostLobby(
 
     show("hostLobby");
 
+
     document
         .getElementById(
             "roomCode"
@@ -48,11 +49,12 @@ export function showGame(
 ) {
 
     /*
-     * Не скрываем hostLobby/clientLobby,
-     * потому что хост должен видеть
-     * панель подключения игроков.
+     * У клиента скрываем lobby.
      *
-     * Для клиента они скрываются.
+     * У HOST оставляем hostLobby,
+     * поскольку там находятся элементы
+     * управления комнатой и подключения
+     * новых игроков.
      */
 
     if (playerId !== "HOST") {
@@ -168,6 +170,11 @@ export function renderPlayers(
         );
 
 
+    if (!container) {
+        return;
+    }
+
+
     container.innerHTML = "";
 
 
@@ -201,19 +208,31 @@ export function renderPlayers(
 
 function show(id) {
 
-    document
-        .getElementById(id)
-        .classList
-        .remove("hidden");
+    const element =
+        document.getElementById(id);
+
+
+    if (element) {
+
+        element.classList
+            .remove("hidden");
+
+    }
 
 }
 
 
 function hide(id) {
 
-    document
-        .getElementById(id)
-        .classList
-        .add("hidden");
+    const element =
+        document.getElementById(id);
+
+
+    if (element) {
+
+        element.classList
+            .add("hidden");
+
+    }
 
 }
