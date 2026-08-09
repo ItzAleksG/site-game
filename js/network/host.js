@@ -1,915 +1,1452 @@
-const RTC_CONFIG = {
-    iceServers: [
-        {
-            urls:
-                "stun:stun.l.google.com:19302"
-        }
-    ]
+import {
+    MESSAGE
+} from "./network/protocol.js";
+
+import {
+    HostNetwork
+} from "./network/host.js";
+
+import {
+    ClientNetwork
+} from "./network/client.js";
+
+import {
+    GameServer
+} from "./game/server.js";
+
+import {
+    LobbyUI
+} from "./ui/lobby.js";
+
+import {
+    GameUI
+} from "./ui/game.js";
+
+
+/*
+============================================================
+DOM
+============================================================
+*/
+
+const elements = {
+    menu:
+        document.getElementById(
+            "lobbyMenu"
+        ),
+
+    hostLobby:
+        document.getElementById(
+            "hostLobby"
+        ),
+
+    clientLobby:
+        document.getElementById(
+            "clientLobby"
+        ),
+
+    game:
+        document.getElementById(
+            "gameSection"
+        ),
+
+    playerName:
+        document.getElementById(
+            "playerName"
+        ),
+
+    hostButton:
+        document.getElementById(
+            "hostButton"
+        ),
+
+    joinButton:
+        document.getElementById(
+            "joinButton"
+        ),
+
+    roomCode:
+        document.getElementById(
+            "roomCode"
+        ),
+
+    hostOffer:
+        document.getElementById(
+            "hostOffer"
+        ),
+
+    hostAnswer:
+        document.getElementById(
+            "hostAnswer"
+        ),
+
+    acceptAnswerButton:
+        document.getElementById(
+            "acceptAnswerButton"
+        ),
+
+    hostPlayers:
+        document.getElementById(
+            "hostPlayers"
+        ),
+
+    hostStatus:
+        document.getElementById(
+            "hostStatus"
+        ),
+
+    clientStatus:
+        document.getElementById(
+            "clientStatus"
+        ),
+
+    createAnswerButton:
+        document.getElementById(
+            "createAnswerButton"
+        ),
+
+    clientAnswer:
+        document.getElementById(
+            "clientAnswer"
+        ),
+
+    gameRoomCode:
+        document.getElementById(
+            "gameRoomCode"
+        ),
+
+    gamePlayerId:
+        document.getElementById(
+            "gamePlayerId"
+        ),
+
+    gameStatus:
+        document.getElementById(
+            "gameStatus"
+        ),
+
+    gameWorld:
+        document.getElementById(
+            "gameWorld"
+        )
 };
 
 
-export class HostNetwork {
-    constructor(
-        gameServer,
-        {
-            iceServers =
-                RTC_CONFIG.iceServers
-        } = {}
+const lobbyUI =
+    new LobbyUI({
+        ...elements
+    });
+
+
+const gameUI =
+    new GameUI({
+        worldElement:
+            elements.gameWorld,
+
+        playersElement:
+            elements.hostPlayers
+    });
+
+
+/*
+============================================================
+STATE
+============================================================
+*/
+
+const state = {
+    mode:
+        "menu",
+
+    roomCode:
+        null,
+
+    gameServer:
+        null,
+
+    hostNetwork:
+        null,
+
+    clientNetwork:
+        null,
+
+    playerId:
+        null,
+
+    playerName:
+        "Player",
+
+    currentSnapshot:
+        null,
+
+    currentInvite:
+        null
+};
+
+
+/*
+============================================================
+INITIALIZATION
+============================================================
+*/
+
+initialize();
+
+
+function initialize() {
+    elements.playerName.value =
+        loadPlayerName();
+
+    bindEvents();
+
+    const invite =
+        getInviteFromHash();
+
+    if (invite) {
+        startClientFromInvite(
+            invite
+        );
+
+        return;
+    }
+
+    lobbyUI.showMenu();
+}
+
+
+/*
+============================================================
+EVENTS
+============================================================
+*/
+
+function bindEvents() {
+    elements.hostButton.addEventListener(
+        "click",
+        createRoom
+    );
+
+    elements.joinButton.addEventListener(
+        "click",
+        joinRoom
+    );
+
+    elements.acceptAnswerButton.addEventListener(
+        "click",
+        acceptPlayerAnswer
+    );
+
+    elements.createAnswerButton.addEventListener(
+        "click",
+        createClientAnswer
+    );
+
+    window.addEventListener(
+        "hashchange",
+        handleHashChange
+    );
+
+    document.addEventListener(
+        "keydown",
+        handleKeyboard
+    );
+}
+
+
+/*
+============================================================
+HOST: CREATE ROOM
+============================================================
+*/
+
+async function createRoom() {
+    if (
+        state.gameServer ||
+        state.hostNetwork
     ) {
-        if (!gameServer) {
-            throw new Error(
-                "HostNetwork requires a GameServer."
-            );
-        }
-
-        this.gameServer =
-            gameServer;
-
-        this.iceServers =
-            iceServers;
-
-        /*
-         * connectionId -> connection
-         */
-        this.connections =
-            new Map();
-
-        this.nextConnectionId =
-            1;
-
-        /*
-         * event -> Set<handler>
-         */
-        this.handlers =
-            new Map();
+        return;
     }
 
+    try {
+        setPlayerName();
 
-    /*
-    ============================================================
-    EVENTS
-    ============================================================
-    */
+        state.mode =
+            "host";
 
-    on(event, handler) {
-        if (
-            typeof handler !==
-            "function"
-        ) {
-            throw new TypeError(
-                "Event handler must be a function."
-            );
-        }
+        state.roomCode =
+            createRoomCode();
 
-        if (
-            !this.handlers.has(
-                event
-            )
-        ) {
-            this.handlers.set(
-                event,
-                new Set()
-            );
-        }
+        state.gameServer =
+            new GameServer({
+                roomCode:
+                    state.roomCode,
 
-        this.handlers
-            .get(event)
-            .add(handler);
-
-        return () => {
-            this.off(
-                event,
-                handler
-            );
-        };
-    }
-
-
-    off(event, handler) {
-        const handlers =
-            this.handlers.get(
-                event
-            );
-
-        if (!handlers) {
-            return;
-        }
-
-        handlers.delete(
-            handler
-        );
-
-        if (
-            handlers.size ===
-            0
-        ) {
-            this.handlers.delete(
-                event
-            );
-        }
-    }
-
-
-    emit(event, data) {
-        const handlers =
-            this.handlers.get(
-                event
-            );
-
-        if (!handlers) {
-            return;
-        }
-
-        for (
-            const handler
-            of handlers
-        ) {
-            try {
-                handler(data);
-            }
-            catch (error) {
-                console.error(
-                    `HostNetwork "${event}" handler failed:`,
-                    error
-                );
-            }
-        }
-    }
-
-
-    /*
-    ============================================================
-    CREATE INVITE
-    ============================================================
-    */
-
-    async createInvite() {
-        if (
-            this.gameServer.isFull()
-        ) {
-            throw new Error(
-                "Room is full."
-            );
-        }
-
-        const connection =
-            this.createConnection();
-
-        const channel =
-            connection.pc.createDataChannel(
-                "game",
-                {
-                    ordered: true
-                }
-            );
-
-        connection.channel =
-            channel;
-
-        this.setupDataChannel(
-            connection
-        );
-
-        const offer =
-            await connection.pc
-                .createOffer();
-
-        await connection.pc
-            .setLocalDescription(
-                offer
-            );
-
-        await this.waitForIceGathering(
-            connection.pc
-        );
-
-        connection.state =
-            "waiting-answer";
-
-        const description =
-            connection.pc.localDescription;
-
-        const invite = {
-            connectionId:
-                connection.id,
-
-            offer: {
-                type:
-                    description.type,
-
-                sdp:
-                    description.sdp
-            }
-        };
-
-        this.emit(
-            "inviteCreated",
-            {
-                connection,
-                invite
-            }
-        );
-
-        return invite;
-    }
-
-
-    /*
-    ============================================================
-    CREATE CONNECTION
-    ============================================================
-    */
-
-    createConnection() {
-        const id =
-            `connection-${this.nextConnectionId++}`;
-
-        const pc =
-            new RTCPeerConnection({
-                iceServers:
-                    this.iceServers
+                maxPlayers:
+                    8
             });
 
-        const connection = {
-            id,
-
-            pc,
-
-            channel:
-                null,
-
-            playerId:
-                null,
-
-            state:
-                "creating",
-
-            createdAt:
-                Date.now()
-        };
-
-        this.connections.set(
-            id,
-            connection
+        state.gameServer.setHostName(
+            state.playerName
         );
 
-        pc.onconnectionstatechange =
-            () => {
-                this.handleConnectionState(
-                    connection
-                );
-            };
+        setupGameServerHandlers();
 
-        pc.oniceconnectionstatechange =
-            () => {
-                this.emit(
-                    "iceConnectionStateChange",
-                    {
-                        connectionId:
-                            connection.id,
-
-                        state:
-                            pc.iceConnectionState
-                    }
-                );
-            };
-
-        pc.onicecandidate =
-            event => {
-                if (
-                    !event.candidate
-                ) {
-                    return;
-                }
-
-                this.emit(
-                    "iceCandidate",
-                    {
-                        connectionId:
-                            connection.id,
-
-                        candidate:
-                            event.candidate
-                    }
-                );
-            };
-
-        /*
-         * HOST сам создаёт DataChannel.
-         *
-         * ondatachannel оставляем как защиту,
-         * если браузер сообщит о канале.
-         */
-        pc.ondatachannel =
-            event => {
-                if (
-                    connection.channel
-                ) {
-                    try {
-                        event.channel.close();
-                    }
-                    catch {
-                        // Ignore.
-                    }
-
-                    return;
-                }
-
-                connection.channel =
-                    event.channel;
-
-                this.setupDataChannel(
-                    connection
-                );
-            };
-
-        return connection;
-    }
-
-
-    /*
-    ============================================================
-    DATA CHANNEL
-    ============================================================
-    */
-
-    setupDataChannel(
-        connection
-    ) {
-        const channel =
-            connection.channel;
-
-        if (!channel) {
-            return;
-        }
-
-        channel.binaryType =
-            "arraybuffer";
-
-        channel.onopen =
-            () => {
-                connection.state =
-                    "connected";
-
-                this.emit(
-                    "playerConnection",
-                    connection
-                );
-
-                this.emit(
-                    "connectionStateChange",
-                    {
-                        connection,
-                        state:
-                            "connected"
-                    }
-                );
-            };
-
-        channel.onmessage =
-            event => {
-                /*
-                 * Только передаём сообщение
-                 * авторитетному GameServer.
-                 */
-                this.gameServer.receive(
-                    connection,
-                    event.data
-                );
-            };
-
-        channel.onclose =
-            () => {
-                this.handleChannelClose(
-                    connection
-                );
-            };
-
-        channel.onerror =
-            error => {
-                console.error(
-                    "WebRTC DataChannel error:",
-                    error
-                );
-
-                this.emit(
-                    "error",
-                    {
-                        connection,
-                        error
-                    }
-                );
-            };
-    }
-
-
-    /*
-    ============================================================
-    ACCEPT ANSWER
-    ============================================================
-    */
-
-    async acceptAnswer(
-        answer,
-        connectionId = null
-    ) {
-        let connection;
-
-        if (connectionId) {
-            connection =
-                this.connections.get(
-                    connectionId
-                );
-        }
-        else {
-            connection =
-                this.findWaitingConnection();
-        }
-
-        if (!connection) {
-            throw new Error(
-                "No waiting WebRTC connection found."
-            );
-        }
-
-        if (
-            connection.state !==
-            "waiting-answer"
-        ) {
-            throw new Error(
-                "Connection is not waiting for an answer."
-            );
-        }
-
-        if (
-            !answer ||
-            typeof answer !==
-            "object"
-        ) {
-            throw new Error(
-                "Invalid WebRTC answer."
-            );
-        }
-
-        await connection.pc
-            .setRemoteDescription(
-                new RTCSessionDescription(
-                    answer
-                )
+        state.hostNetwork =
+            new HostNetwork(
+                state.gameServer
             );
 
-        connection.state =
-            "connecting";
+        setupHostNetworkHandlers();
 
-        this.emit(
-            "answerAccepted",
-            {
-                connection,
-                answer
-            }
+        state.playerId =
+            "HOST";
+
+        lobbyUI.setRoomCode(
+            state.roomCode
         );
 
-        return connection;
+        elements.gameRoomCode.textContent =
+            state.roomCode;
+
+        elements.gamePlayerId.textContent =
+            "HOST";
+
+        gameUI.setPlayerId(
+            "HOST"
+        );
+
+        showHostInterface();
+
+        renderHostState();
+
+        await createHostInvite();
+
+        lobbyUI.setHostStatus(
+            "Комната создана. Отправь приглашение игроку."
+        );
+    }
+    catch (error) {
+        console.error(
+            "Failed to create room:",
+            error
+        );
+
+        lobbyUI.setHostStatus(
+            `Ошибка: ${error.message}`
+        );
+    }
+}
+
+
+/*
+============================================================
+HOST: CREATE INVITE
+============================================================
+*/
+
+async function createHostInvite() {
+    if (
+        !state.hostNetwork
+    ) {
+        throw new Error(
+            "Host network is not initialized."
+        );
     }
 
-
-    /*
-    ============================================================
-    FIND WAITING CONNECTION
-    ============================================================
-    */
-
-    findWaitingConnection() {
-        const connections =
-            [
-                ...this.connections.values()
-            ];
-
-        for (
-            let i =
-                connections.length - 1;
-            i >= 0;
-            i--
-        ) {
-            if (
-                connections[i].state ===
-                "waiting-answer"
-            ) {
-                return connections[i];
-            }
-        }
+    if (
+        state.gameServer.isFull()
+    ) {
+        lobbyUI.setHostStatus(
+            "Комната заполнена."
+        );
 
         return null;
     }
 
+    const invite =
+        await state.hostNetwork
+            .createInvite();
 
-    /*
-    ============================================================
-    SEND
-    ============================================================
-    */
+    state.currentInvite =
+        invite;
 
-    send(
-        connection,
-        message
+    const link =
+        createInviteLink({
+            roomCode:
+                state.roomCode,
+
+            connectionId:
+                invite.connectionId,
+
+            offer:
+                invite.offer
+        });
+
+    lobbyUI.setOffer(
+        link
+    );
+
+    return invite;
+}
+
+
+/*
+============================================================
+HOST: ACCEPT ANSWER
+============================================================
+*/
+
+async function acceptPlayerAnswer() {
+    if (
+        !state.hostNetwork
     ) {
-        if (!connection) {
-            return false;
+        return;
+    }
+
+    try {
+        const raw =
+            elements.hostAnswer.value
+                .trim();
+
+        if (!raw) {
+            throw new Error(
+                "Вставь Answer игрока."
+            );
         }
 
-        const channel =
-            connection.channel;
+        const data =
+            decodeDataFromText(
+                raw
+            );
 
         if (
-            !channel ||
-            channel.readyState !==
-            "open"
+            data.type !==
+            "answer"
         ) {
-            return false;
+            throw new Error(
+                "Это не Answer."
+            );
         }
 
+        const connectionId =
+            data.connectionId ??
+            state.currentInvite
+                ?.connectionId ??
+            null;
+
+        await state.hostNetwork
+            .acceptAnswer(
+                data.answer,
+                connectionId
+            );
+
+        elements.hostAnswer.value =
+            "";
+
+        lobbyUI.setHostStatus(
+            "Answer принят. Ожидаю подключения игрока..."
+        );
+    }
+    catch (error) {
+        console.error(
+            "Failed to accept answer:",
+            error
+        );
+
+        lobbyUI.setHostStatus(
+            `Ошибка: ${error.message}`
+        );
+    }
+}
+
+
+/*
+============================================================
+HOST NETWORK EVENTS
+============================================================
+*/
+
+function setupHostNetworkHandlers() {
+    const network =
+        state.hostNetwork;
+
+    if (!network) {
+        return;
+    }
+
+    network.on(
+        "playerConnection",
+        connection => {
+            lobbyUI.setHostStatus(
+                "WebRTC подключён. Регистрирую игрока..."
+            );
+        }
+    );
+
+    network.on(
+        "connectionStateChange",
+        data => {
+            if (
+                data.state ===
+                "connected"
+            ) {
+                lobbyUI.setHostStatus(
+                    "WebRTC соединение установлено."
+                );
+            }
+        }
+    );
+
+    network.on(
+        "connectionRemoved",
+        connection => {
+            renderHostState();
+
+            if (
+                state.mode ===
+                "host"
+            ) {
+                lobbyUI.setHostStatus(
+                    "Игрок отключился."
+                );
+            }
+        }
+    );
+
+    network.on(
+        "error",
+        data => {
+            console.error(
+                "Host network error:",
+                data
+            );
+        }
+    );
+}
+
+
+/*
+============================================================
+GAME SERVER EVENTS
+============================================================
+*/
+
+function setupGameServerHandlers() {
+    const server =
+        state.gameServer;
+
+    if (!server) {
+        return;
+    }
+
+    server.onPlayerJoined =
+        async player => {
+            renderHostState();
+
+            lobbyUI.setHostStatus(
+                `${player.name} подключился.`
+            );
+
+            /*
+             * После успешной регистрации игрока
+             * создаём следующее приглашение.
+             *
+             * Это позволяет подключать P-1,
+             * затем P-2, P-3 и т.д.
+             */
+            if (
+                state.mode ===
+                "host" &&
+                !server.isFull()
+            ) {
+                try {
+                    await createHostInvite();
+
+                    lobbyUI.setHostStatus(
+                        `${player.name} подключился. Новое приглашение готово.`
+                    );
+                }
+                catch (error) {
+                    console.error(
+                        "Failed to create next invite:",
+                        error
+                    );
+                }
+            }
+        };
+
+    server.onPlayerLeft =
+        player => {
+            renderHostState();
+
+            if (player) {
+                lobbyUI.setHostStatus(
+                    `${player.name} отключился.`
+                );
+            }
+
+            /*
+             * Если место освободилось,
+             * поддерживаем актуальное приглашение.
+             */
+            if (
+                state.mode ===
+                    "host" &&
+                !server.isFull()
+            ) {
+                createHostInvite()
+                    .catch(
+                        error => {
+                            console.error(
+                                "Failed to recreate invite:",
+                                error
+                            );
+                        }
+                    );
+            }
+        };
+
+    server.onPlayerListChanged =
+        players => {
+            lobbyUI.setPlayers(
+                players
+            );
+
+            lobbyUI.setPlayerCount(
+                players.length,
+                server.maxPlayers
+            );
+
+            renderHostState();
+        };
+
+    server.onSnapshot =
+        snapshot => {
+            state.currentSnapshot =
+                snapshot;
+
+            gameUI.render(
+                snapshot
+            );
+        };
+
+    server.onRoomStateChanged =
+        roomState => {
+            lobbyUI.setPlayerCount(
+                roomState.playerCount,
+                roomState.maxPlayers
+            );
+        };
+}
+
+
+/*
+============================================================
+HOST STATE
+============================================================
+*/
+
+function renderHostState() {
+    if (
+        !state.gameServer
+    ) {
+        return;
+    }
+
+    const players =
+        state.gameServer.getPlayers();
+
+    lobbyUI.setPlayers(
+        players
+    );
+
+    lobbyUI.setPlayerCount(
+        players.length,
+        state.gameServer.maxPlayers
+    );
+
+    const snapshot =
+        state.gameServer.getSnapshot();
+
+    state.currentSnapshot =
+        snapshot;
+
+    gameUI.setPlayerId(
+        "HOST"
+    );
+
+    gameUI.render(
+        snapshot
+    );
+}
+
+
+/*
+============================================================
+CLIENT: JOIN
+============================================================
+*/
+
+function joinRoom() {
+    const invite =
+        getInviteFromHash();
+
+    if (!invite) {
+        alert(
+            "Открой invitation-ссылку хоста."
+        );
+
+        return;
+    }
+
+    startClientFromInvite(
+        invite
+    );
+}
+
+
+async function startClientFromInvite(
+    invite
+) {
+    if (!invite) {
+        return;
+    }
+
+    if (
+        !invite.offer
+    ) {
+        lobbyUI.showClient();
+
+        lobbyUI.setClientStatus(
+            "Invitation не содержит WebRTC offer."
+        );
+
+        return;
+    }
+
+    if (
+        state.clientNetwork
+    ) {
+        state.clientNetwork.close();
+    }
+
+    try {
+        setPlayerName();
+
+        state.mode =
+            "client";
+
+        state.roomCode =
+            invite.roomCode;
+
+        state.playerId =
+            null;
+
+        lobbyUI.showClient();
+
+        lobbyUI.setClientStatus(
+            `Комната ${invite.roomCode} найдена.`
+        );
+
+        elements.gameRoomCode.textContent =
+            invite.roomCode;
+
+        state.clientNetwork =
+            new ClientNetwork();
+
+        setupClientNetworkHandlers();
+
+        lobbyUI.setClientStatus(
+            "Создаю WebRTC-соединение..."
+        );
+
+        const answer =
+            await state.clientNetwork
+                .connect(
+                    invite.offer
+                );
+
+        const answerLink =
+            createAnswerLink({
+                roomCode:
+                    invite.roomCode,
+
+                connectionId:
+                    invite.connectionId,
+
+                answer
+            });
+
+        lobbyUI.setClientAnswer(
+            answerLink
+        );
+
+        lobbyUI.setClientStatus(
+            "Answer создан. Отправь его HOST."
+        );
+
+        elements.createAnswerButton.disabled =
+            true;
+    }
+    catch (error) {
+        console.error(
+            "Failed to connect to room:",
+            error
+        );
+
+        lobbyUI.setClientStatus(
+            `Ошибка: ${error.message}`
+        );
+    }
+}
+
+
+/*
+============================================================
+CLIENT: ANSWER BUTTON
+============================================================
+*/
+
+async function createClientAnswer() {
+    const invite =
+        getInviteFromHash();
+
+    if (!invite) {
+        lobbyUI.setClientStatus(
+            "Invitation-ссылка не найдена."
+        );
+
+        return;
+    }
+
+    await startClientFromInvite(
+        invite
+    );
+}
+
+
+/*
+============================================================
+CLIENT NETWORK EVENTS
+============================================================
+*/
+
+function setupClientNetworkHandlers() {
+    const client =
+        state.clientNetwork;
+
+    if (!client) {
+        return;
+    }
+
+    client.on(
+        "connected",
+        () => {
+            lobbyUI.setClientStatus(
+                "WebRTC подключён. Регистрирую игрока..."
+            );
+
+            client.join(
+                state.playerName
+            );
+        }
+    );
+
+    client.on(
+        MESSAGE.WELCOME,
+        message => {
+            state.playerId =
+                message.playerId;
+
+            state.roomCode =
+                message.roomCode;
+
+            state.currentSnapshot =
+                message.snapshot;
+
+            elements.gameRoomCode.textContent =
+                message.roomCode;
+
+            elements.gamePlayerId.textContent =
+                message.playerId;
+
+            gameUI.setPlayerId(
+                message.playerId
+            );
+
+            gameUI.render(
+                message.snapshot
+            );
+
+            lobbyUI.showGame();
+
+            lobbyUI.setClientStatus(
+                `Подключено к комнате ${message.roomCode}.`
+            );
+        }
+    );
+
+    client.on(
+        MESSAGE.SNAPSHOT,
+        message => {
+            state.currentSnapshot =
+                message.snapshot;
+
+            gameUI.render(
+                message.snapshot
+            );
+        }
+    );
+
+    client.on(
+        MESSAGE.PLAYER_JOINED,
+        message => {
+            console.log(
+                "Player joined:",
+                message.player
+            );
+        }
+    );
+
+    client.on(
+        MESSAGE.PLAYER_LEFT,
+        message => {
+            console.log(
+                "Player left:",
+                message.playerId
+            );
+        }
+    );
+
+    client.on(
+        MESSAGE.ERROR,
+        message => {
+            lobbyUI.setClientStatus(
+                `Ошибка сервера: ${
+                    message.message ??
+                    "unknown error"
+                }`
+            );
+        }
+    );
+
+    client.on(
+        "disconnected",
+        () => {
+            lobbyUI.setClientStatus(
+                "Соединение с HOST потеряно."
+            );
+        }
+    );
+
+    client.on(
+        "connectionStateChange",
+        stateValue => {
+            console.log(
+                "Client connection state:",
+                stateValue
+            );
+        }
+    );
+
+    client.on(
+        "error",
+        error => {
+            console.error(
+                "Client network error:",
+                error
+            );
+        }
+    );
+}
+
+
+/*
+============================================================
+KEYBOARD / MOVEMENT
+============================================================
+*/
+
+function handleKeyboard(event) {
+    const target =
+        event.target;
+
+    if (
+        target instanceof
+            HTMLInputElement ||
+        target instanceof
+            HTMLTextAreaElement
+    ) {
+        return;
+    }
+
+    let dx = 0;
+    let dy = 0;
+
+    switch (
+        event.key.toLowerCase()
+    ) {
+        case "w":
+        case "arrowup":
+            dy = -1;
+            break;
+
+        case "s":
+        case "arrowdown":
+            dy = 1;
+            break;
+
+        case "a":
+        case "arrowleft":
+            dx = -1;
+            break;
+
+        case "d":
+        case "arrowright":
+            dx = 1;
+            break;
+
+        default:
+            return;
+    }
+
+    event.preventDefault();
+
+    /*
+     * HOST управляет собой
+     * непосредственно через GameServer.
+     */
+    if (
+        state.mode ===
+            "host" &&
+        state.gameServer
+    ) {
+        state.gameServer.hostInput({
+            action:
+                "move",
+
+            dx,
+            dy
+        });
+
+        return;
+    }
+
+    /*
+     * CLIENT отправляет INPUT
+     * через WebRTC.
+     */
+    if (
+        state.mode ===
+            "client" &&
+        state.clientNetwork
+    ) {
+        state.clientNetwork.move(
+            dx,
+            dy
+        );
+    }
+}
+
+
+/*
+============================================================
+INTERFACE
+============================================================
+*/
+
+function showHostInterface() {
+    lobbyUI.showHost();
+
+    elements.gameRoomCode.textContent =
+        state.roomCode;
+
+    elements.gamePlayerId.textContent =
+        "HOST";
+}
+
+
+function showGame() {
+    lobbyUI.showGame();
+}
+
+
+/*
+============================================================
+PLAYER NAME
+============================================================
+*/
+
+function setPlayerName() {
+    const name =
+        elements.playerName.value
+            .trim();
+
+    state.playerName =
+        name ||
+        "Player";
+
+    localStorage.setItem(
+        "browser-game-player-name",
+        state.playerName
+    );
+}
+
+
+function loadPlayerName() {
+    return (
+        localStorage.getItem(
+            "browser-game-player-name"
+        ) ||
+        "Player"
+    );
+}
+
+
+/*
+============================================================
+INVITE HASH
+============================================================
+*/
+
+function handleHashChange() {
+    const invite =
+        getInviteFromHash();
+
+    if (
+        invite &&
+        state.mode ===
+            "menu"
+    ) {
+        startClientFromInvite(
+            invite
+        );
+    }
+}
+
+
+function getInviteFromHash() {
+    if (
+        !location.hash
+    ) {
+        return null;
+    }
+
+    const hash =
+        location.hash.substring(
+            1
+        );
+
+    /*
+     * Поддерживаем:
+     *
+     * #invite=...
+     *
+     * и:
+     *
+     * #answer=...
+     */
+    const params =
+        new URLSearchParams(
+            hash
+        );
+
+    const inviteData =
+        params.get(
+            "invite"
+        );
+
+    if (inviteData) {
         try {
-            channel.send(message);
-            return true;
+            return decodeData(
+                inviteData
+            );
         }
         catch (error) {
             console.error(
-                "HostNetwork.send failed:",
+                "Invalid invitation:",
                 error
             );
 
-            this.emit(
-                "error",
-                {
-                    connection,
-                    error
-                }
-            );
-
-            return false;
+            return null;
         }
     }
 
+    return null;
+}
 
-    /*
-    ============================================================
-    SEND TO PLAYER
-    ============================================================
-    */
 
-    sendToPlayer(
-        playerId,
-        message
-    ) {
-        const connection =
-            this.findByPlayerId(
-                playerId
-            );
+/*
+============================================================
+INVITE LINKS
+============================================================
+*/
 
-        if (!connection) {
-            return false;
+function createInviteLink(
+    data
+) {
+    return createLink(
+        "invite",
+        {
+            version:
+                1,
+
+            roomCode:
+                data.roomCode,
+
+            connectionId:
+                data.connectionId,
+
+            offer:
+                data.offer
         }
+    );
+}
 
-        return this.send(
-            connection,
-            message
+
+function createAnswerLink(
+    data
+) {
+    return createLink(
+        "answer",
+        {
+            version:
+                1,
+
+            roomCode:
+                data.roomCode,
+
+            connectionId:
+                data.connectionId,
+
+            answer:
+                data.answer
+        }
+    );
+}
+
+
+function createLink(
+    type,
+    data
+) {
+    const encoded =
+        encodeData({
+            type,
+            ...data
+        });
+
+    return (
+        location.origin +
+        location.pathname +
+        "#" +
+        type +
+        "=" +
+        encoded
+    );
+}
+
+
+/*
+============================================================
+ANSWER DECODING
+============================================================
+*/
+
+function decodeDataFromText(
+    text
+) {
+    const value =
+        text.trim();
+
+    if (!value) {
+        throw new Error(
+            "Пустые данные."
         );
     }
 
-
     /*
-    ============================================================
-    BROADCAST
-    ============================================================
-    */
-
-    broadcast(
-        message,
-        exceptConnectionId = null
+     * HOST может вставить полную
+     * Answer-ссылку.
+     */
+    if (
+        value.startsWith(
+            "http://"
+        ) ||
+        value.startsWith(
+            "https://"
+        )
     ) {
-        let sent = 0;
+        const url =
+            new URL(value);
 
-        for (
-            const connection
-            of this.connections.values()
-        ) {
-            if (
-                connection.id ===
-                exceptConnectionId
-            ) {
-                continue;
-            }
-
-            if (
-                this.send(
-                    connection,
-                    message
-                )
-            ) {
-                sent++;
-            }
-        }
-
-        return sent;
-    }
-
-
-    /*
-    ============================================================
-    LOOKUP
-    ============================================================
-    */
-
-    getConnection(
-        connectionId
-    ) {
-        return (
-            this.connections.get(
-                connectionId
-            ) ||
-            null
-        );
-    }
-
-
-    findByPlayerId(
-        playerId
-    ) {
-        for (
-            const connection
-            of this.connections.values()
-        ) {
-            if (
-                connection.playerId ===
-                playerId
-            ) {
-                return connection;
-            }
-        }
-
-        return null;
-    }
-
-
-    getConnections() {
-        return [
-            ...this.connections.values()
-        ];
-    }
-
-
-    getConnectedConnections() {
-        return this
-            .getConnections()
-            .filter(
-                connection =>
-                    connection.state ===
-                    "connected"
-            );
-    }
-
-
-    getConnectionCount() {
-        return this.connections.size;
-    }
-
-
-    /*
-    ============================================================
-    ICE
-    ============================================================
-    */
-
-    async addIceCandidate(
-        connectionId,
-        candidate
-    ) {
-        const connection =
-            this.getConnection(
-                connectionId
+        const hash =
+            url.hash.replace(
+                /^#/,
+                ""
             );
 
-        if (!connection) {
+        const params =
+            new URLSearchParams(
+                hash
+            );
+
+        const encoded =
+            params.get(
+                "answer"
+            );
+
+        if (!encoded) {
             throw new Error(
-                "Connection not found."
+                "Answer-ссылка пуста или некорректна."
             );
         }
 
-        if (!candidate) {
-            return;
-        }
+        return decodeData(
+            encoded
+        );
+    }
 
-        await connection.pc
-            .addIceCandidate(
-                candidate
+    /*
+     * Также принимаем напрямую
+     * Base64URL-строку.
+     */
+    return decodeData(
+        value
+    );
+}
+
+
+/*
+============================================================
+BASE64URL JSON
+============================================================
+*/
+
+function encodeData(
+    data
+) {
+    const json =
+        JSON.stringify(
+            data
+        );
+
+    const bytes =
+        new TextEncoder()
+            .encode(json);
+
+    let binary = "";
+
+    for (
+        const byte
+        of bytes
+    ) {
+        binary +=
+            String.fromCharCode(
+                byte
             );
     }
 
-
-    /*
-    ============================================================
-    ICE GATHERING
-    ============================================================
-    */
-
-    async waitForIceGathering(
-        pc,
-        timeout = 5000
-    ) {
-        if (
-            pc.iceGatheringState ===
-            "complete"
-        ) {
-            return;
-        }
-
-        await new Promise(
-            resolve => {
-                let finished = false;
-
-                const finish =
-                    () => {
-                        if (finished) {
-                            return;
-                        }
-
-                        finished = true;
-
-                        clearTimeout(
-                            timer
-                        );
-
-                        pc.removeEventListener(
-                            "icegatheringstatechange",
-                            check
-                        );
-
-                        resolve();
-                    };
-
-                const check =
-                    () => {
-                        if (
-                            pc.iceGatheringState ===
-                            "complete"
-                        ) {
-                            finish();
-                        }
-                    };
-
-                const timer =
-                    setTimeout(
-                        finish,
-                        timeout
-                    );
-
-                pc.addEventListener(
-                    "icegatheringstatechange",
-                    check
-                );
-
-                check();
-            }
+    return btoa(binary)
+        .replace(
+            /\+/g,
+            "-"
+        )
+        .replace(
+            /\//g,
+            "_"
+        )
+        .replace(
+            /=/g,
+            ""
         );
-    }
+}
 
 
-    /*
-    ============================================================
-    CONNECTION STATE
-    ============================================================
-    */
-
-    handleConnectionState(
-        connection
-    ) {
-        const state =
-            connection.pc
-                .connectionState;
-
-        connection.state =
-            state;
-
-        this.emit(
-            "connectionStateChange",
-            {
-                connection,
-                state
-            }
-        );
-
-        if (
-            state === "failed" ||
-            state === "closed"
-        ) {
-            this.removeConnection(
-                connection
-            );
-        }
-    }
-
-
-    handleChannelClose(
-        connection
-    ) {
-        this.removeConnection(
-            connection
-        );
-    }
-
-
-    /*
-    ============================================================
-    REMOVE CONNECTION
-    ============================================================
-    */
-
-    removeConnection(
-        connection
-    ) {
-        if (!connection) {
-            return;
-        }
-
-        if (
-            !this.connections.has(
-                connection.id
+function decodeData(
+    data
+) {
+    let normalized =
+        String(data)
+            .replace(
+                /-/g,
+                "+"
             )
-        ) {
-            return;
-        }
-
-        this.connections.delete(
-            connection.id
-        );
-
-        /*
-         * Если игрок успел зарегистрироваться,
-         * GameServer удалит его из мира.
-         */
-        if (
-            connection.playerId
-        ) {
-            this.gameServer.disconnect(
-                connection
+            .replace(
+                /_/g,
+                "/"
             );
-        }
 
-        try {
-            if (
-                connection.channel &&
-                connection.channel.readyState !==
-                "closed"
-            ) {
-                connection.channel.close();
-            }
-        }
-        catch {
-            // Ignore.
-        }
-
-        try {
-            if (
-                connection.pc &&
-                connection.pc.connectionState !==
-                "closed"
-            ) {
-                connection.pc.close();
-            }
-        }
-        catch {
-            // Ignore.
-        }
-
-        connection.state =
-            "closed";
-
-        this.emit(
-            "connectionRemoved",
-            connection
-        );
+    while (
+        normalized.length %
+            4 !==
+        0
+    ) {
+        normalized +=
+            "=";
     }
 
+    const binary =
+        atob(
+            normalized
+        );
 
-    /*
-    ============================================================
-    CLOSE
-    ============================================================
-    */
+    const bytes =
+        new Uint8Array(
+            binary.length
+        );
 
-    close() {
-        const connections =
-            this.getConnections();
-
-        for (
-            const connection
-            of connections
-        ) {
-            this.removeConnection(
-                connection
-            );
-        }
-
-        this.connections.clear();
+    for (
+        let i = 0;
+        i < binary.length;
+        i++
+    ) {
+        bytes[i] =
+            binary.charCodeAt(i);
     }
+
+    return JSON.parse(
+        new TextDecoder()
+            .decode(bytes)
+    );
+}
+
+
+/*
+============================================================
+ROOM CODE
+============================================================
+*/
+
+function createRoomCode() {
+    const chars =
+        "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+
+    const bytes =
+        new Uint32Array(
+            8
+        );
+
+    crypto.getRandomValues(
+        bytes
+    );
+
+    let value = "";
+
+    for (
+        const byte
+        of bytes
+    ) {
+        value +=
+            chars[
+                byte %
+                chars.length
+            ];
+    }
+
+    return (
+        value.substring(0, 4) +
+        "-" +
+        value.substring(4)
+    );
 }
