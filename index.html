@@ -16,7 +16,6 @@
     >
 </head>
 
-
 <body>
 
 <main class="container">
@@ -28,7 +27,6 @@
             прямо в браузере HOST.
         </p>
     </header>
-
 
     <section id="lobby">
 
@@ -65,7 +63,6 @@
             </div>
         </div>
 
-
         <div
             id="hostLobby"
             class="hidden"
@@ -86,7 +83,8 @@
             <h3>Приглашение игрока</h3>
 
             <p class="muted">
-                Каждому игроку создаётся отдельное WebRTC-приглашение.
+                После подключения игрока здесь автоматически появится
+                новое приглашение для следующего игрока.
             </p>
 
             <textarea
@@ -95,13 +93,6 @@
                 spellcheck="false"
                 placeholder="Здесь появится invitation-ссылка"
             ></textarea>
-
-            <button
-                id="newInviteButton"
-                type="button"
-            >
-                Создать приглашение следующего игрока
-            </button>
 
             <h3>Answer игрока</h3>
 
@@ -130,7 +121,6 @@
 
             <div id="hostPlayers"></div>
         </div>
-
 
         <div
             id="clientLobby"
@@ -180,7 +170,6 @@
         </div>
 
     </section>
-
 
     <section
         id="gameSection"
