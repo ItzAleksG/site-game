@@ -81,6 +81,21 @@ export class ClientNetwork {
         const socket = new WebSocket(endpoint);
         this.signalingSocket = socket;
 
+        socket.addEventListener("message", event => {
+            this.handleSignalingMessage(event.data);
+        });
+
+        socket.addEventListener("close", () => {
+            if (this.signalingSocket === socket) {
+                this.signalingSocket = null;
+            }
+            this.emit("signalingDisconnected");
+        });
+
+        socket.addEventListener("error", error => {
+            this.emit("signalingError", error);
+        });
+
         await new Promise((resolve, reject) => {
             let settled = false;
 
@@ -97,21 +112,9 @@ export class ClientNetwork {
                 finish(resolve);
             }, { once: true });
 
-            socket.addEventListener("error", error => {
+            socket.addEventListener("error", () => {
                 finish(reject, new Error("Signaling server connection failed."));
-                this.emit("signalingError", error);
             }, { once: true });
-        });
-
-        socket.addEventListener("message", event => {
-            this.handleSignalingMessage(event.data);
-        });
-
-        socket.addEventListener("close", () => {
-            if (this.signalingSocket === socket) {
-                this.signalingSocket = null;
-            }
-            this.emit("signalingDisconnected");
         });
 
         return true;
@@ -142,6 +145,7 @@ export class ClientNetwork {
                     console.error("Failed to create automatic WebRTC answer:", error);
                     this.emit("error", error);
                 });
+            return;
         }
 
         if (message.type === "host_left") {
@@ -206,7 +210,6 @@ export class ClientNetwork {
         );
 
         const answer = await this.pc.createAnswer();
-
         await this.pc.setLocalDescription(answer);
         await waitForIceGatheringComplete(this.pc);
 
