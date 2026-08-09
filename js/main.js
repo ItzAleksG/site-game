@@ -14,16 +14,6 @@ import {
     GameServer
 } from "./game/server.js";
 
-gameServer.onChat =
-    message => {
-
-        addChatMessage(
-            message.name,
-            message.text
-        );
-
-    };
-
 import {
     showHostLobby,
     showClientLobby,
@@ -38,10 +28,7 @@ import {
 } from "./ui/lobby.js";
 
 import {
-    renderWorld,
-    addChatMessage,
-    getChatText,
-    clearChatText
+    renderWorld
 } from "./ui/game.js";
 
 
@@ -51,29 +38,19 @@ STATE
 ============================================================
 */
 
-
 const roomCode =
     createRoomCode();
 
 
-let gameServer =
-    null;
+let gameServer = null;
 
+let hostNetwork = null;
 
-let hostNetwork =
-    null;
+let clientNetwork = null;
 
+let clientPlayerId = null;
 
-let clientNetwork =
-    null;
-
-
-let clientPlayerId =
-    null;
-
-
-let currentSnapshot =
-    null;
+let currentSnapshot = null;
 
 
 /*
@@ -82,11 +59,8 @@ INITIAL UI
 ============================================================
 */
 
-
 document
-    .getElementById(
-        "roomCode"
-    )
+    .getElementById("roomCode")
     .textContent =
     roomCode;
 
@@ -97,11 +71,8 @@ HOST
 ============================================================
 */
 
-
 document
-    .getElementById(
-        "hostButton"
-    )
+    .getElementById("hostButton")
     .onclick =
     async () => {
 
@@ -109,15 +80,6 @@ document
             new GameServer(
                 roomCode
             );
-
-        gameServer.onChat = message => {
-
-    addChatMessage(
-        message.name,
-        message.text
-    );
-
-};
 
 
         gameServer.setHostName(
@@ -156,10 +118,6 @@ document
             );
 
 
-        /*
-         * HOST уже является игроком.
-         */
-
         showHostLobby(
             roomCode
         );
@@ -196,10 +154,9 @@ document
 
 /*
 ============================================================
-CREATE NEW INVITE
+CREATE HOST INVITE
 ============================================================
 */
-
 
 async function createHostInvite() {
 
@@ -227,7 +184,7 @@ async function createHostInvite() {
 
 
     setHostStatus(
-        "Отправь эту ссылку игроку. После его ответа вставь Answer ниже."
+        "Отправь эту ссылку игроку. После его ответа вставь Answer."
     );
 
 }
@@ -238,7 +195,6 @@ async function createHostInvite() {
 ACCEPT PLAYER ANSWER
 ============================================================
 */
-
 
 document
     .getElementById(
@@ -278,16 +234,13 @@ document
 
 
             setHostStatus(
-                "Игрок подключён. Создаю новое приглашение для следующего игрока..."
+                "Игрок подключён. Создаю приглашение для следующего игрока..."
             );
 
 
             /*
-             * Главное изменение:
-             *
-             * после каждого игрока
-             * автоматически создаём
-             * отдельное WebRTC-соединение.
+             * Для следующего игрока
+             * создаётся отдельное WebRTC-соединение.
              */
 
             await createHostInvite();
@@ -315,7 +268,6 @@ document
 CLIENT
 ============================================================
 */
-
 
 document
     .getElementById(
@@ -358,11 +310,6 @@ document
                     encoded
                 );
 
-
-            /*
-             * Теперь roomCode приходит
-             * вместе с Offer.
-             */
 
             if (
                 !invite.roomCode ||
@@ -428,7 +375,6 @@ CLIENT HANDLERS
 ============================================================
 */
 
-
 function setupClientHandlers() {
 
     clientNetwork.on(
@@ -459,11 +405,6 @@ function setupClientHandlers() {
             currentSnapshot =
                 message.snapshot;
 
-
-            /*
-             * Теперь roomCode приходит
-             * от сервера.
-             */
 
             showGame(
                 message.roomCode,
@@ -506,13 +447,9 @@ function setupClientHandlers() {
         MESSAGE.PLAYER_JOINED,
         message => {
 
-            const player =
-                message.player;
-
-
-            addChatMessage(
-                "SYSTEM",
-                `${player.name} вошёл в игру`
+            console.log(
+                "Player joined:",
+                message.player
             );
 
         }
@@ -523,22 +460,9 @@ function setupClientHandlers() {
         MESSAGE.PLAYER_LEFT,
         message => {
 
-            addChatMessage(
-                "SYSTEM",
-                `${message.playerId} вышел из игры`
-            );
-
-        }
-    );
-
-
-    clientNetwork.on(
-        MESSAGE.CHAT,
-        message => {
-
-            addChatMessage(
-                message.name,
-                message.text
+            console.log(
+                "Player left:",
+                message.playerId
             );
 
         }
@@ -565,12 +489,12 @@ MOVEMENT
 ============================================================
 */
 
-
 document.addEventListener(
     "keydown",
     event => {
 
         let dx = 0;
+
         let dy = 0;
 
 
@@ -621,8 +545,8 @@ document.addEventListener(
 
 
         /*
-         * Хост двигается напрямую
-         * через GameServer.
+         * HOST управляет своим игроком
+         * непосредственно через GameServer.
          */
 
         if (gameServer) {
@@ -666,104 +590,9 @@ document.addEventListener(
 
 /*
 ============================================================
-CHAT
-============================================================
-*/
-
-
-document
-    .getElementById(
-        "sendChatButton"
-    )
-    .onclick =
-    () => {
-
-        const text =
-            getChatText();
-
-
-        if (!text) {
-            return;
-        }
-
-
-        /*
-         * Хост.
-         */
-
-        if (gameServer) {
-
-            /*
-             * Показываем сообщение хосту.
-             */
-
-            addChatMessage(
-                "Host",
-                text
-            );
-
-
-            gameServer.hostChat(
-                text
-            );
-
-
-            clearChatText();
-
-            return;
-
-        }
-
-
-        /*
-         * Клиент.
-         */
-
-        if (clientNetwork) {
-
-            clientNetwork.chat(
-                text
-            );
-
-
-            clearChatText();
-
-        }
-
-    };
-
-
-document
-    .getElementById(
-        "chatMessage"
-    )
-    .addEventListener(
-        "keydown",
-        event => {
-
-            if (
-                event.key ===
-                "Enter"
-            ) {
-
-                document
-                    .getElementById(
-                        "sendChatButton"
-                    )
-                    .click();
-
-            }
-
-        }
-    );
-
-
-/*
-============================================================
 INVITE / LINK
 ============================================================
 */
-
 
 function createLink(
     type,
@@ -931,7 +760,6 @@ function getHash(name) {
 ROOM CODE
 ============================================================
 */
-
 
 function createRoomCode() {
 
