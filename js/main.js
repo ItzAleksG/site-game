@@ -110,6 +110,15 @@ document
                 roomCode
             );
 
+        gameServer.onChat = message => {
+
+    addChatMessage(
+        message.name,
+        message.text
+    );
+
+};
+
 
         gameServer.setHostName(
             getPlayerName()
