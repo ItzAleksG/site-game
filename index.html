@@ -3,17 +3,9 @@
 
 <head>
     <meta charset="UTF-8">
-    <meta
-        name="viewport"
-        content="width=device-width, initial-scale=1.0"
-    >
-
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Browser Game</title>
-
-    <link
-        rel="stylesheet"
-        href="./style.css"
-    >
+    <link rel="stylesheet" href="./style.css">
 </head>
 
 <body>
@@ -22,10 +14,7 @@
 
     <header class="page-header">
         <h1>Browser Game</h1>
-        <p>
-            Игровой сервер работает
-            прямо в браузере HOST.
-        </p>
+        <p>Игровой сервер работает прямо в браузере HOST.</p>
     </header>
 
     <section id="lobby">
@@ -33,10 +22,7 @@
         <div id="lobbyMenu">
             <h2>Лобби</h2>
 
-            <label for="playerName">
-                Имя игрока
-            </label>
-
+            <label for="playerName">Имя игрока</label>
             <input
                 id="playerName"
                 type="text"
@@ -47,26 +33,31 @@
             >
 
             <div class="buttons">
-                <button
-                    id="hostButton"
-                    type="button"
-                >
+                <button id="hostButton" type="button">
                     Создать комнату
                 </button>
 
-                <button
-                    id="joinButton"
-                    type="button"
-                >
+                <button id="joinButton" type="button">
                     Подключиться
                 </button>
             </div>
+
+            <label for="joinRoomCode">Код комнаты</label>
+            <input
+                id="joinRoomCode"
+                type="text"
+                maxlength="12"
+                autocomplete="off"
+                placeholder="Например: A7K2P9"
+                spellcheck="false"
+            >
+
+            <p class="muted">
+                Введи код комнаты HOST и нажми «Подключиться».
+            </p>
         </div>
 
-        <div
-            id="hostLobby"
-            class="hidden"
-        >
+        <div id="hostLobby" class="hidden">
             <h2>Комната HOST</h2>
 
             <div class="roomCode">
@@ -75,43 +66,12 @@
             </div>
 
             <div class="notice">
-                HOST является первым игроком
-                комнаты и запускает игровую
-                логику.
+                HOST является первым игроком комнаты и запускает игровую логику.
             </div>
-
-            <h3>Приглашение игрока</h3>
-
-            <p class="muted">
-                После подключения игрока здесь автоматически появится
-                новое приглашение для следующего игрока.
-            </p>
-
-            <textarea
-                id="hostOffer"
-                readonly
-                spellcheck="false"
-                placeholder="Здесь появится invitation-ссылка"
-            ></textarea>
-
-            <h3>Answer игрока</h3>
-
-            <textarea
-                id="hostAnswer"
-                spellcheck="false"
-                placeholder="Вставь сюда Answer-ссылку игрока"
-            ></textarea>
-
-            <button
-                id="acceptAnswerButton"
-                type="button"
-            >
-                Подключить игрока
-            </button>
 
             <div class="status">
                 <strong>Статус</strong>
-                <p id="hostStatus">-</p>
+                <p id="hostStatus">Подключение к сигнализации...</p>
             </div>
 
             <div class="players-header">
@@ -120,18 +80,40 @@
             </div>
 
             <div id="hostPlayers"></div>
+
+            <details>
+                <summary>Ручной WebRTC режим</summary>
+
+                <h3>Приглашение игрока</h3>
+                <textarea
+                    id="hostOffer"
+                    readonly
+                    spellcheck="false"
+                    placeholder="Здесь появится invitation-ссылка"
+                ></textarea>
+
+                <h3>Answer игрока</h3>
+                <textarea
+                    id="hostAnswer"
+                    spellcheck="false"
+                    placeholder="Вставь сюда Answer-ссылку игрока"
+                ></textarea>
+
+                <button id="acceptAnswerButton" type="button">
+                    Подключить игрока вручную
+                </button>
+            </details>
         </div>
 
-        <div
-            id="clientLobby"
-            class="hidden"
-        >
+        <div id="clientLobby" class="hidden">
             <h2>Подключение</h2>
 
-            <label for="clientPlayerName">
-                Твой ник
-            </label>
+            <div class="roomCode">
+                <span>Код комнаты</span>
+                <strong id="clientRoomCode">-</strong>
+            </div>
 
+            <label for="clientPlayerName">Твой ник</label>
             <input
                 id="clientPlayerName"
                 type="text"
@@ -143,38 +125,27 @@
 
             <div class="status">
                 <strong>Статус</strong>
-                <p id="clientStatus">
-                    Подготовка...
-                </p>
+                <p id="clientStatus">Подготовка...</p>
             </div>
 
-            <button
-                id="createAnswerButton"
-                type="button"
-            >
-                Создать Answer
+            <button id="createAnswerButton" type="button">
+                Подключиться к комнате
             </button>
 
-            <h3>Твой Answer</h3>
-
-            <p class="muted">
-                Отправь эту ссылку HOST.
-            </p>
-
-            <textarea
-                id="clientAnswer"
-                readonly
-                spellcheck="false"
-                placeholder="Здесь появится Answer-ссылка"
-            ></textarea>
+            <details>
+                <summary>Ручной Answer</summary>
+                <textarea
+                    id="clientAnswer"
+                    readonly
+                    spellcheck="false"
+                    placeholder="Здесь появится Answer-ссылка"
+                ></textarea>
+            </details>
         </div>
 
     </section>
 
-    <section
-        id="gameSection"
-        class="hidden"
-    >
+    <section id="gameSection" class="hidden">
         <div class="gameHeader">
             <div>
                 <span>Комната</span>
@@ -187,28 +158,19 @@
             </div>
         </div>
 
-        <div
-            id="gameWorld"
-            aria-label="Игровой мир"
-        ></div>
+        <div id="gameWorld" aria-label="Игровой мир"></div>
 
         <div class="controls">
             <strong>Управление</strong>
             <span>WASD / стрелки — движение</span>
         </div>
 
-        <p
-            id="gameStatus"
-            class="game-status"
-        ></p>
+        <p id="gameStatus" class="game-status"></p>
     </section>
 
 </main>
 
-<script
-    type="module"
-    src="./js/main.js"
-></script>
+<script type="module" src="./js/main.js"></script>
 
 </body>
 </html>
