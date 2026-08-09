@@ -18,24 +18,21 @@ export class HostNetwork {
         } = {}
     ) {
         if (!gameServer) {
-            throw new Error(
-                "HostNetwork requires a GameServer."
-            );
+            throw new Error("HostNetwork requires a GameServer.");
         }
 
         this.gameServer = gameServer;
         this.iceServers = iceServers;
-
         this.connections = new Map();
+        this.peerConnections = new Map();
         this.handlers = new Map();
+        this.signalingSocket = null;
+        this.signalingRoom = null;
     }
-
 
     on(event, handler) {
         if (typeof handler !== "function") {
-            throw new TypeError(
-                "Event handler must be a function."
-            );
+            throw new TypeError("Event handler must be a function.");
         }
 
         if (!this.handlers.has(event)) {
@@ -43,46 +40,173 @@ export class HostNetwork {
         }
 
         this.handlers.get(event).add(handler);
-
         return () => this.off(event, handler);
     }
 
-
     off(event, handler) {
         const handlers = this.handlers.get(event);
-
-        if (!handlers) {
-            return;
-        }
+        if (!handlers) return;
 
         handlers.delete(handler);
-
         if (handlers.size === 0) {
             this.handlers.delete(event);
         }
     }
 
-
     emit(event, data) {
         const handlers = this.handlers.get(event);
-
-        if (!handlers) {
-            return;
-        }
+        if (!handlers) return;
 
         for (const handler of handlers) {
             try {
                 handler(data);
             }
             catch (error) {
-                console.error(
-                    `HostNetwork "${event}" handler failed:`,
-                    error
-                );
+                console.error(`HostNetwork "${event}" handler failed:`, error);
             }
         }
     }
 
+    async connectSignaling(url, roomCode) {
+        if (!url) {
+            throw new Error("Signaling URL is not configured.");
+        }
+
+        this.closeSignaling();
+        this.signalingRoom = String(roomCode ?? "").trim().toUpperCase();
+
+        if (!this.signalingRoom) {
+            throw new Error("Room code is required for signaling.");
+        }
+
+        const endpoint = new URL(url);
+        endpoint.searchParams.set("room", this.signalingRoom);
+        endpoint.searchParams.set("role", "host");
+
+        const socket = new WebSocket(endpoint);
+        this.signalingSocket = socket;
+
+        await new Promise((resolve, reject) => {
+            let settled = false;
+
+            const finish = (callback, value) => {
+                if (settled) return;
+                settled = true;
+                callback(value);
+            };
+
+            socket.addEventListener("open", () => {
+                this.emit("signalingConnected", {
+                    roomCode: this.signalingRoom
+                });
+                finish(resolve);
+            }, { once: true });
+
+            socket.addEventListener("error", error => {
+                finish(reject, new Error("Signaling server connection failed."));
+                this.emit("signalingError", error);
+            }, { once: true });
+        });
+
+        socket.addEventListener("message", event => {
+            this.handleSignalingMessage(event.data);
+        });
+
+        socket.addEventListener("close", () => {
+            if (this.signalingSocket === socket) {
+                this.signalingSocket = null;
+            }
+            this.emit("signalingDisconnected");
+        });
+
+        return true;
+    }
+
+    handleSignalingMessage(raw) {
+        let message;
+
+        try {
+            message = JSON.parse(raw);
+        }
+        catch {
+            return;
+        }
+
+        if (!message || typeof message !== "object") return;
+
+        if (message.type === "peer_joined") {
+            this.createInviteForPeer(message.peerId).catch(error => {
+                console.error("Failed to create peer offer:", error);
+                this.emit("error", { error, peerId: message.peerId });
+            });
+            return;
+        }
+
+        if (message.type === "peer_left") {
+            const connectionId = this.peerConnections.get(message.peerId);
+            if (connectionId) {
+                this.removeConnection(connectionId, true);
+                this.peerConnections.delete(message.peerId);
+            }
+            return;
+        }
+
+        if (message.type === "signal") {
+            if (message.data?.type !== "answer") return;
+
+            const connectionId = message.data.connectionId;
+
+            this.acceptAnswer(
+                message.data.answer,
+                connectionId
+            ).catch(error => {
+                console.error("Failed to accept automatic answer:", error);
+                this.emit("error", {
+                    error,
+                    peerId: message.from
+                });
+            });
+        }
+    }
+
+    async createInviteForPeer(peerId) {
+        const invite = await this.createInvite();
+
+        this.peerConnections.set(
+            peerId,
+            invite.connectionId
+        );
+
+        this.sendSignal(
+            peerId,
+            {
+                type: "offer",
+                connectionId: invite.connectionId,
+                offer: invite.offer
+            }
+        );
+
+        this.emit("inviteCreated", {
+            peerId,
+            ...invite
+        });
+
+        return invite;
+    }
+
+    sendSignal(to, data) {
+        if (!this.signalingSocket || this.signalingSocket.readyState !== WebSocket.OPEN) {
+            return false;
+        }
+
+        this.signalingSocket.send(JSON.stringify({
+            type: "signal",
+            to,
+            data
+        }));
+
+        return true;
+    }
 
     async createInvite() {
         if (this.gameServer.isFull()) {
@@ -104,11 +228,7 @@ export class HostNetwork {
             closed: false
         };
 
-        this.connections.set(
-            connectionId,
-            connection
-        );
-
+        this.connections.set(connectionId, connection);
         this.setupConnection(connection);
 
         const offer = await pc.createOffer();
@@ -131,7 +251,6 @@ export class HostNetwork {
         };
     }
 
-
     async acceptAnswer(answer, connectionId = null) {
         if (!answer || typeof answer !== "object") {
             throw new Error("Invalid WebRTC answer.");
@@ -140,9 +259,7 @@ export class HostNetwork {
         const connection = this.findConnection(connectionId);
 
         if (!connection) {
-            throw new Error(
-                "WebRTC connection for this Answer was not found."
-            );
+            throw new Error("WebRTC connection for this Answer was not found.");
         }
 
         await connection.pc.setRemoteDescription(
@@ -156,7 +273,6 @@ export class HostNetwork {
         return true;
     }
 
-
     setupConnection(connection) {
         const { pc, channel } = connection;
 
@@ -168,14 +284,8 @@ export class HostNetwork {
                 state
             });
 
-            if (
-                state === "failed" ||
-                state === "closed"
-            ) {
-                this.removeConnection(
-                    connection.id,
-                    true
-                );
+            if (state === "failed" || state === "closed") {
+                this.removeConnection(connection.id, true);
             }
         };
 
@@ -188,10 +298,7 @@ export class HostNetwork {
             });
 
             if (state === "failed") {
-                this.removeConnection(
-                    connection.id,
-                    true
-                );
+                this.removeConnection(connection.id, true);
             }
         };
 
@@ -213,25 +320,15 @@ export class HostNetwork {
         };
 
         channel.onmessage = event => {
-            this.gameServer.receive(
-                connection,
-                event.data
-            );
+            this.gameServer.receive(connection, event.data);
         };
 
         channel.onclose = () => {
-            this.removeConnection(
-                connection.id,
-                true
-            );
+            this.removeConnection(connection.id, true);
         };
 
         channel.onerror = error => {
-            console.error(
-                "Host DataChannel error:",
-                error
-            );
-
+            console.error("Host DataChannel error:", error);
             this.emit("error", {
                 connectionId: connection.id,
                 error
@@ -239,51 +336,37 @@ export class HostNetwork {
         };
     }
 
-
     findConnection(connectionId) {
         if (connectionId) {
             return this.connections.get(connectionId) || null;
         }
 
-        const pending = [
-            ...this.connections.values()
-        ].filter(connection => !connection.playerId);
+        const pending = [...this.connections.values()]
+            .filter(connection => !connection.playerId);
 
-        if (pending.length === 1) {
-            return pending[0];
-        }
-
-        return null;
+        return pending.length === 1 ? pending[0] : null;
     }
-
 
     removeConnection(connectionId, notifyServer) {
         const connection = this.connections.get(connectionId);
 
-        if (!connection || connection.closed) {
-            return;
-        }
+        if (!connection || connection.closed) return;
 
         connection.closed = true;
         this.connections.delete(connectionId);
+
+        for (const [peerId, id] of this.peerConnections) {
+            if (id === connectionId) {
+                this.peerConnections.delete(peerId);
+            }
+        }
 
         if (notifyServer && connection.playerId) {
             this.gameServer.disconnect(connection);
         }
 
-        try {
-            connection.channel.close();
-        }
-        catch {
-            // Ignore.
-        }
-
-        try {
-            connection.pc.close();
-        }
-        catch {
-            // Ignore.
-        }
+        try { connection.channel.close(); } catch {}
+        try { connection.pc.close(); } catch {}
 
         this.emit("connectionRemoved", {
             connectionId,
@@ -291,20 +374,28 @@ export class HostNetwork {
         });
     }
 
+    closeSignaling() {
+        if (!this.signalingSocket) return;
+
+        try {
+            this.signalingSocket.close();
+        }
+        catch {
+            // Ignore.
+        }
+
+        this.signalingSocket = null;
+    }
 
     close() {
-        const connections = [
-            ...this.connections.values()
-        ];
+        this.closeSignaling();
 
-        for (const connection of connections) {
-            this.removeConnection(
-                connection.id,
-                true
-            );
+        for (const connection of [...this.connections.values()]) {
+            this.removeConnection(connection.id, true);
         }
 
         this.connections.clear();
+        this.peerConnections.clear();
     }
 }
 
@@ -329,27 +420,16 @@ function waitForIceGatheringComplete(pc) {
     }
 
     return new Promise(resolve => {
-        const timeout = setTimeout(
-            resolve,
-            10000
-        );
+        const timeout = setTimeout(resolve, 10000);
 
         const check = () => {
-            if (pc.iceGatheringState !== "complete") {
-                return;
-            }
+            if (pc.iceGatheringState !== "complete") return;
 
             clearTimeout(timeout);
-            pc.removeEventListener(
-                "icegatheringstatechange",
-                check
-            );
+            pc.removeEventListener("icegatheringstatechange", check);
             resolve();
         };
 
-        pc.addEventListener(
-            "icegatheringstatechange",
-            check
-        );
+        pc.addEventListener("icegatheringstatechange", check);
     });
 }
