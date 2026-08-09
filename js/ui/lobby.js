@@ -1,66 +1,88 @@
 export class LobbyUI {
     constructor(elements = {}) {
         this.elements = elements;
-    }
 
-    showHost() {
-        this.hideAll();
-
-        this.show(
-            this.elements.hostLobby
-        );
-    }
-
-    showClient() {
-        this.hideAll();
-
-        this.show(
-            this.elements.clientLobby
-        );
-    }
-
-    showGame() {
-        this.hideAll();
-
-        this.show(
+        /*
+         * Только эти элементы являются экранами.
+         *
+         * ВАЖНО:
+         * Нельзя скрывать все elements подряд.
+         * В elements также находятся кнопки, input,
+         * textarea и прочие элементы интерфейса.
+         */
+        this.views = [
+            this.elements.menu,
+            this.elements.hostLobby,
+            this.elements.clientLobby,
             this.elements.game
-        );
+        ].filter(Boolean);
     }
+
+
+    /*
+    ============================================================
+    VIEWS
+    ============================================================
+    */
 
     showMenu() {
-        this.hideAll();
-
-        this.show(
+        this.showView(
             this.elements.menu
         );
     }
 
-    hideAll() {
-        for (
-            const element
-            of Object.values(
-                this.elements
-            )
-        ) {
-            if (!element) {
-                continue;
-            }
 
-            element.classList.add(
+    showHost() {
+        this.showView(
+            this.elements.hostLobby
+        );
+    }
+
+
+    showClient() {
+        this.showView(
+            this.elements.clientLobby
+        );
+    }
+
+
+    showGame() {
+        this.showView(
+            this.elements.game
+        );
+    }
+
+
+    showView(view) {
+        this.hideViews();
+
+        if (!view) {
+            return;
+        }
+
+        view.classList.remove(
+            "hidden"
+        );
+    }
+
+
+    hideViews() {
+        for (
+            const view
+            of this.views
+        ) {
+            view.classList.add(
                 "hidden"
             );
         }
     }
 
-    show(element) {
-        if (!element) {
-            return;
-        }
 
-        element.classList.remove(
-            "hidden"
-        );
-    }
+    /*
+    ============================================================
+    ROOM
+    ============================================================
+    */
 
     setRoomCode(roomCode) {
         this.setText(
@@ -69,12 +91,20 @@ export class LobbyUI {
         );
     }
 
+
+    /*
+    ============================================================
+    STATUS
+    ============================================================
+    */
+
     setStatus(status) {
         this.setText(
             this.elements.status,
             status
         );
     }
+
 
     setHostStatus(status) {
         this.setText(
@@ -83,12 +113,20 @@ export class LobbyUI {
         );
     }
 
+
     setClientStatus(status) {
         this.setText(
             this.elements.clientStatus,
             status
         );
     }
+
+
+    /*
+    ============================================================
+    WEBRTC OFFER
+    ============================================================
+    */
 
     setOffer(offer) {
         this.setValue(
@@ -99,6 +137,7 @@ export class LobbyUI {
         );
     }
 
+
     getOffer() {
         return parseDescription(
             this.getValue(
@@ -106,6 +145,13 @@ export class LobbyUI {
             )
         );
     }
+
+
+    /*
+    ============================================================
+    WEBRTC ANSWER
+    ============================================================
+    */
 
     setAnswer(answer) {
         this.setValue(
@@ -116,6 +162,7 @@ export class LobbyUI {
         );
     }
 
+
     getAnswer() {
         return parseDescription(
             this.getValue(
@@ -124,22 +171,31 @@ export class LobbyUI {
         );
     }
 
+
     setClientAnswer(answer) {
         this.setValue(
             this.elements.clientAnswer,
-            serializeDescription(
-                answer
-            )
+            typeof answer === "string"
+                ? answer
+                : serializeDescription(
+                    answer
+                )
         );
     }
 
+
     getClientAnswer() {
-        return parseDescription(
-            this.getValue(
-                this.elements.clientAnswer
-            )
+        return this.getValue(
+            this.elements.clientAnswer
         );
     }
+
+
+    /*
+    ============================================================
+    PLAYERS
+    ============================================================
+    */
 
     setPlayerCount(
         count,
@@ -163,15 +219,16 @@ export class LobbyUI {
         );
     }
 
-    setPlayers(players) {
-        if (
-            !this.elements.playerList
-        ) {
+
+    setPlayers(players = []) {
+        const list =
+            this.elements.playerList;
+
+        if (!list) {
             return;
         }
 
-        this.elements.playerList.innerHTML =
-            "";
+        list.innerHTML = "";
 
         for (
             const player
@@ -215,11 +272,18 @@ export class LobbyUI {
                 id
             );
 
-            this.elements.playerList.appendChild(
+            list.appendChild(
                 item
             );
         }
     }
+
+
+    /*
+    ============================================================
+    BUTTONS
+    ============================================================
+    */
 
     setJoinButtonEnabled(
         enabled
@@ -234,6 +298,7 @@ export class LobbyUI {
             !enabled;
     }
 
+
     setHostButtonEnabled(
         enabled
     ) {
@@ -247,6 +312,13 @@ export class LobbyUI {
             !enabled;
     }
 
+
+    /*
+    ============================================================
+    DOM HELPERS
+    ============================================================
+    */
+
     setText(
         element,
         value
@@ -258,6 +330,7 @@ export class LobbyUI {
         element.textContent =
             value ?? "";
     }
+
 
     setValue(
         element,
@@ -271,6 +344,7 @@ export class LobbyUI {
             value ?? "";
     }
 
+
     getValue(element) {
         if (!element) {
             return "";
@@ -281,11 +355,28 @@ export class LobbyUI {
 }
 
 
+/*
+============================================================
+WEBRTC DESCRIPTION SERIALIZATION
+============================================================
+*/
+
 function serializeDescription(
     description
 ) {
     if (!description) {
         return "";
+    }
+
+    /*
+     * Если уже передана готовая строка,
+     * не сериализуем её повторно.
+     */
+    if (
+        typeof description ===
+        "string"
+    ) {
+        return description;
     }
 
     return JSON.stringify(
@@ -307,7 +398,8 @@ function parseDescription(
 ) {
     if (
         !value ||
-        typeof value !== "string"
+        typeof value !==
+            "string"
     ) {
         return null;
     }
