@@ -24,6 +24,8 @@ export class GameServer {
 
         this.onSnapshot = null;
 
+        this.onChat = null;
+
         /*
          * Хост — полноценный игрок.
          */
@@ -68,16 +70,56 @@ export class GameServer {
 
     hostChat(text) {
 
-        this.chat(
+    const player =
+        this.world.getPlayer("HOST");
+
+    if (!player) {
+        return;
+    }
+
+    text =
+        String(text || "")
+            .trim()
+            .slice(0, 500);
+
+    if (!text) {
+        return;
+    }
+
+    this.broadcast(
+
+        makeMessage(
+            MESSAGE.CHAT,
             {
-                playerId: "HOST"
-            },
-            {
+                playerId: "HOST",
+                name: player.name,
                 text
             }
-        );
+        )
+
+    );
+
+    /*
+     * HOST сам не получает сообщение через
+     * WebRTC, поэтому вызываем callback
+     * локально.
+     */
+
+    if (this.onChat) {
+
+        this.onChat({
+
+            playerId: "HOST",
+
+            name: player.name,
+
+            text
+
+        });
 
     }
+
+}
 
 
     /*
