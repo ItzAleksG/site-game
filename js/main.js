@@ -30,6 +30,9 @@ DOM
 */
 
 const elements = {
+    /*
+     * Lobby views
+     */
     menu:
         document.getElementById(
             "lobbyMenu"
@@ -50,6 +53,10 @@ const elements = {
             "gameSection"
         ),
 
+
+    /*
+     * Main menu
+     */
     playerName:
         document.getElementById(
             "playerName"
@@ -65,12 +72,20 @@ const elements = {
             "joinButton"
         ),
 
+
+    /*
+     * Host lobby
+     */
     roomCode:
         document.getElementById(
             "roomCode"
         ),
 
-    hostOffer:
+    /*
+     * IMPORTANT:
+     * LobbyUI calls this field "offer".
+     */
+    offer:
         document.getElementById(
             "hostOffer"
         ),
@@ -85,9 +100,18 @@ const elements = {
             "acceptAnswerButton"
         ),
 
-    hostPlayers:
+    /*
+     * IMPORTANT:
+     * LobbyUI calls this field "playerList".
+     */
+    playerList:
         document.getElementById(
             "hostPlayers"
+        ),
+
+    playerCount:
+        document.getElementById(
+            "playerCount"
         ),
 
     hostStatus:
@@ -95,6 +119,10 @@ const elements = {
             "hostStatus"
         ),
 
+
+    /*
+     * Client lobby
+     */
     clientStatus:
         document.getElementById(
             "clientStatus"
@@ -110,6 +138,10 @@ const elements = {
             "clientAnswer"
         ),
 
+
+    /*
+     * Game
+     */
     gameRoomCode:
         document.getElementById(
             "gameRoomCode"
@@ -139,9 +171,9 @@ UI
 */
 
 const lobbyUI =
-    new LobbyUI({
-        ...elements
-    });
+    new LobbyUI(
+        elements
+    );
 
 
 const gameUI =
@@ -150,7 +182,7 @@ const gameUI =
             elements.gameWorld,
 
         playersElement:
-            elements.hostPlayers
+            elements.playerList
     });
 
 
@@ -205,11 +237,6 @@ function initialize() {
 
     bindEvents();
 
-    /*
-     * Если страница была открыта
-     * по invitation-ссылке HOST,
-     * сразу показываем экран подключения.
-     */
     const invite =
         getInviteFromHash();
 
@@ -237,30 +264,25 @@ function bindEvents() {
         createRoom
     );
 
-
     elements.joinButton.addEventListener(
         "click",
         joinRoom
     );
-
 
     elements.acceptAnswerButton.addEventListener(
         "click",
         acceptPlayerAnswer
     );
 
-
     elements.createAnswerButton.addEventListener(
         "click",
         createClientAnswer
     );
 
-
     window.addEventListener(
         "hashchange",
         handleHashChange
     );
-
 
     document.addEventListener(
         "keydown",
@@ -283,18 +305,14 @@ async function createRoom() {
         return;
     }
 
-
     try {
         setPlayerName();
-
 
         state.mode =
             "host";
 
-
         state.roomCode =
             createRoomCode();
-
 
         state.gameServer =
             new GameServer({
@@ -305,53 +323,41 @@ async function createRoom() {
                     8
             });
 
-
         state.gameServer.setHostName(
             state.playerName
         );
 
-
         setupGameServerHandlers();
-
 
         state.hostNetwork =
             new HostNetwork(
                 state.gameServer
             );
 
+        setupHostNetworkHandlers();
+
+        state.playerId =
+            "HOST";
 
         lobbyUI.setRoomCode(
             state.roomCode
         );
 
-
         elements.gameRoomCode.textContent =
             state.roomCode;
 
-
         elements.gamePlayerId.textContent =
             "HOST";
-
 
         gameUI.setPlayerId(
             "HOST"
         );
 
-
-        /*
-         * HOST сразу является игроком.
-         */
         showHostInterface();
-
 
         renderHostState();
 
-
-        /*
-         * Создаём первое приглашение.
-         */
         await createHostInvite();
-
 
         lobbyUI.setHostStatus(
             "Комната создана. Отправь приглашение игроку."
@@ -363,9 +369,25 @@ async function createRoom() {
             error
         );
 
+        /*
+         * Если создание комнаты произошло
+         * частично, не оставляем сломанное
+         * состояние.
+         */
+        if (state.hostNetwork) {
+            state.hostNetwork.close();
+        }
 
-        lobbyUI.setHostStatus(
-            `Ошибка: ${error.message}`
+        state.hostNetwork =
+            null;
+
+        state.gameServer =
+            null;
+
+        lobbyUI.showMenu();
+
+        lobbyUI.setStatus(
+            `Ошибка создания комнаты: ${error.message}`
         );
     }
 }
@@ -378,12 +400,13 @@ HOST INVITE
 */
 
 async function createHostInvite() {
-    if (!state.hostNetwork) {
+    if (
+        !state.hostNetwork
+    ) {
         throw new Error(
             "Host network is not initialized."
         );
     }
-
 
     if (
         state.gameServer.isFull()
@@ -395,23 +418,13 @@ async function createHostInvite() {
         return null;
     }
 
-
     const invite =
         await state.hostNetwork
             .createInvite();
 
-
     state.currentInvite =
         invite;
 
-
-    /*
-     * В invitation находятся:
-     *
-     * - roomCode
-     * - connectionId
-     * - WebRTC offer
-     */
     const link =
         createInviteLink({
             roomCode:
@@ -424,11 +437,9 @@ async function createHostInvite() {
                 invite.offer
         });
 
-
     lobbyUI.setOffer(
         link
     );
-
 
     return invite;
 }
@@ -447,12 +458,10 @@ async function acceptPlayerAnswer() {
         return;
     }
 
-
     try {
         const raw =
             elements.hostAnswer.value
                 .trim();
-
 
         if (!raw) {
             throw new Error(
@@ -460,12 +469,10 @@ async function acceptPlayerAnswer() {
             );
         }
 
-
         const data =
             decodeDataFromText(
                 raw
             );
-
 
         if (
             data.type !==
@@ -476,13 +483,11 @@ async function acceptPlayerAnswer() {
             );
         }
 
-
         const connectionId =
             data.connectionId ??
             state.currentInvite
                 ?.connectionId ??
             null;
-
 
         await state.hostNetwork
             .acceptAnswer(
@@ -490,32 +495,18 @@ async function acceptPlayerAnswer() {
                 connectionId
             );
 
+        elements.hostAnswer.value =
+            "";
 
         lobbyUI.setHostStatus(
             "Answer принят. Ожидаю подключения игрока..."
         );
-
-
-        elements.hostAnswer.value =
-            "";
-
-
-        /*
-         * Новое приглашение создаётся
-         * только после того, как текущее
-         * соединение успешно установлено.
-         *
-         * Это важно: иначе можно получить
-         * несколько одновременно ожидающих
-         * connection без понятного назначения.
-         */
     }
     catch (error) {
         console.error(
             "Failed to accept answer:",
             error
         );
-
 
         lobbyUI.setHostStatus(
             `Ошибка: ${error.message}`
@@ -531,29 +522,23 @@ HOST NETWORK EVENTS
 */
 
 function setupHostNetworkHandlers() {
-    if (!state.hostNetwork) {
+    const network =
+        state.hostNetwork;
+
+    if (!network) {
         return;
     }
 
-
-    state.hostNetwork.on(
+    network.on(
         "playerConnection",
-        connection => {
+        () => {
             lobbyUI.setHostStatus(
-                "Игрок подключился к WebRTC. Ожидаю регистрацию..."
+                "WebRTC подключён. Ожидаю регистрацию игрока..."
             );
-
-
-            /*
-             * После того как игрок действительно
-             * зарегистрируется через JOIN,
-             * GameServer обновит список игроков.
-             */
         }
     );
 
-
-    state.hostNetwork.on(
+    network.on(
         "connectionStateChange",
         data => {
             if (
@@ -567,12 +552,10 @@ function setupHostNetworkHandlers() {
         }
     );
 
-
-    state.hostNetwork.on(
+    network.on(
         "connectionRemoved",
         () => {
             renderHostState();
-
 
             if (
                 state.mode ===
@@ -585,8 +568,7 @@ function setupHostNetworkHandlers() {
         }
     );
 
-
-    state.hostNetwork.on(
+    network.on(
         "error",
         data => {
             console.error(
@@ -608,41 +590,41 @@ function setupGameServerHandlers() {
     const server =
         state.gameServer;
 
+    if (!server) {
+        return;
+    }
 
     server.onPlayerJoined =
         player => {
-
             renderHostState();
-
 
             lobbyUI.setHostStatus(
                 `${player.name} подключился (${player.id}).`
             );
 
-
             /*
-             * После регистрации игрока
-             * готовим приглашение для следующего.
+             * Только после реального JOIN
+             * создаём приглашение следующему игроку.
              */
             if (
                 !server.isFull()
             ) {
                 createHostInvite()
-                    .catch(error => {
-                        console.error(
-                            "Failed to create next invite:",
-                            error
-                        );
-                    });
+                    .catch(
+                        error => {
+                            console.error(
+                                "Failed to create next invite:",
+                                error
+                            );
+                        }
+                    );
             }
         };
 
 
     server.onPlayerLeft =
         player => {
-
             renderHostState();
-
 
             if (player) {
                 lobbyUI.setHostStatus(
@@ -654,17 +636,14 @@ function setupGameServerHandlers() {
 
     server.onPlayerListChanged =
         players => {
-
             lobbyUI.setPlayers(
                 players
             );
-
 
             lobbyUI.setPlayerCount(
                 players.length,
                 server.maxPlayers
             );
-
 
             renderHostState();
         };
@@ -672,10 +651,8 @@ function setupGameServerHandlers() {
 
     server.onSnapshot =
         snapshot => {
-
             state.currentSnapshot =
                 snapshot;
-
 
             gameUI.render(
                 snapshot
@@ -685,7 +662,6 @@ function setupGameServerHandlers() {
 
     server.onRoomStateChanged =
         roomState => {
-
             lobbyUI.setPlayerCount(
                 roomState.playerCount,
                 roomState.maxPlayers
@@ -707,34 +683,27 @@ function renderHostState() {
         return;
     }
 
-
     const players =
         state.gameServer.getPlayers();
-
 
     lobbyUI.setPlayers(
         players
     );
-
 
     lobbyUI.setPlayerCount(
         players.length,
         state.gameServer.maxPlayers
     );
 
-
     const snapshot =
         state.gameServer.getSnapshot();
-
 
     state.currentSnapshot =
         snapshot;
 
-
     gameUI.setPlayerId(
         "HOST"
     );
-
 
     gameUI.render(
         snapshot
@@ -752,7 +721,6 @@ function joinRoom() {
     const invite =
         getInviteFromHash();
 
-
     if (!invite) {
         alert(
             "Открой invitation-ссылку хоста."
@@ -760,7 +728,6 @@ function joinRoom() {
 
         return;
     }
-
 
     startClientFromInvite(
         invite
@@ -771,48 +738,52 @@ function joinRoom() {
 async function startClientFromInvite(
     invite
 ) {
+    if (!invite) {
+        return;
+    }
+
+    if (!invite.offer) {
+        lobbyUI.showClient();
+
+        lobbyUI.setClientStatus(
+            "Invitation не содержит WebRTC offer."
+        );
+
+        return;
+    }
+
     if (
         state.clientNetwork
     ) {
         state.clientNetwork.close();
     }
 
-
     try {
         setPlayerName();
-
 
         state.mode =
             "client";
 
-
         state.roomCode =
             invite.roomCode;
 
-
         lobbyUI.showClient();
-
 
         lobbyUI.setClientStatus(
             `Комната ${invite.roomCode} найдена.`
         );
 
-
         elements.gameRoomCode.textContent =
             invite.roomCode;
-
 
         state.clientNetwork =
             new ClientNetwork();
 
-
         setupClientNetworkHandlers();
-
 
         lobbyUI.setClientStatus(
             "Создаю WebRTC-соединение..."
         );
-
 
         const answer =
             await state.clientNetwork
@@ -820,11 +791,6 @@ async function startClientFromInvite(
                     invite.offer
                 );
 
-
-        /*
-         * Answer передаётся HOST
-         * вручную через ссылку.
-         */
         const answerLink =
             createAnswerLink({
                 roomCode:
@@ -836,16 +802,13 @@ async function startClientFromInvite(
                 answer
             });
 
-
         lobbyUI.setClientAnswer(
             answerLink
         );
 
-
         lobbyUI.setClientStatus(
-            "Answer создан. Отправь его хосту."
+            "Answer создан. Отправь его HOST."
         );
-
 
         elements.createAnswerButton.disabled =
             true;
@@ -855,7 +818,6 @@ async function startClientFromInvite(
             "Failed to connect to room:",
             error
         );
-
 
         lobbyUI.setClientStatus(
             `Ошибка: ${error.message}`
@@ -874,7 +836,6 @@ async function createClientAnswer() {
     const invite =
         getInviteFromHash();
 
-
     if (!invite) {
         lobbyUI.setClientStatus(
             "Invitation-ссылка не найдена."
@@ -882,7 +843,6 @@ async function createClientAnswer() {
 
         return;
     }
-
 
     await startClientFromInvite(
         invite
@@ -900,15 +860,16 @@ function setupClientNetworkHandlers() {
     const client =
         state.clientNetwork;
 
+    if (!client) {
+        return;
+    }
 
     client.on(
         "connected",
         () => {
-
             lobbyUI.setClientStatus(
                 "WebRTC подключён. Регистрирую игрока..."
             );
-
 
             client.join(
                 state.playerName
@@ -916,43 +877,33 @@ function setupClientNetworkHandlers() {
         }
     );
 
-
     client.on(
         MESSAGE.WELCOME,
         message => {
-
             state.playerId =
                 message.playerId;
-
 
             state.roomCode =
                 message.roomCode;
 
-
             state.currentSnapshot =
                 message.snapshot;
-
 
             elements.gameRoomCode.textContent =
                 message.roomCode;
 
-
             elements.gamePlayerId.textContent =
                 message.playerId;
-
 
             gameUI.setPlayerId(
                 message.playerId
             );
 
-
             gameUI.render(
                 message.snapshot
             );
 
-
             lobbyUI.showGame();
-
 
             lobbyUI.setClientStatus(
                 `Подключено к комнате ${message.roomCode}.`
@@ -960,14 +911,11 @@ function setupClientNetworkHandlers() {
         }
     );
 
-
     client.on(
         MESSAGE.SNAPSHOT,
         message => {
-
             state.currentSnapshot =
                 message.snapshot;
-
 
             gameUI.render(
                 message.snapshot
@@ -975,11 +923,9 @@ function setupClientNetworkHandlers() {
         }
     );
 
-
     client.on(
         MESSAGE.PLAYER_JOINED,
         message => {
-
             console.log(
                 "Player joined:",
                 message.player
@@ -987,11 +933,9 @@ function setupClientNetworkHandlers() {
         }
     );
 
-
     client.on(
         MESSAGE.PLAYER_LEFT,
         message => {
-
             console.log(
                 "Player left:",
                 message.playerId
@@ -999,33 +943,30 @@ function setupClientNetworkHandlers() {
         }
     );
 
-
     client.on(
         MESSAGE.ERROR,
         message => {
-
             lobbyUI.setClientStatus(
-                `Ошибка сервера: ${message.message ?? "unknown error"}`
+                `Ошибка сервера: ${
+                    message.message ??
+                    "unknown error"
+                }`
             );
         }
     );
 
-
     client.on(
         "disconnected",
         () => {
-
             lobbyUI.setClientStatus(
                 "Соединение с HOST потеряно."
             );
         }
     );
 
-
     client.on(
         "connectionStateChange",
         stateValue => {
-
             console.log(
                 "Client connection state:",
                 stateValue
@@ -1033,11 +974,9 @@ function setupClientNetworkHandlers() {
         }
     );
 
-
     client.on(
         "error",
         error => {
-
             console.error(
                 "Client network error:",
                 error
@@ -1054,13 +993,8 @@ KEYBOARD / MOVEMENT
 */
 
 function handleKeyboard(event) {
-    /*
-     * Не перехватываем клавиатуру,
-     * когда пользователь печатает.
-     */
     const target =
         event.target;
-
 
     if (
         target instanceof
@@ -1071,10 +1005,8 @@ function handleKeyboard(event) {
         return;
     }
 
-
     let dx = 0;
     let dy = 0;
-
 
     switch (
         event.key.toLowerCase()
@@ -1103,14 +1035,8 @@ function handleKeyboard(event) {
             return;
     }
 
-
     event.preventDefault();
 
-
-    /*
-     * HOST управляет собой
-     * непосредственно через GameServer.
-     */
     if (
         state.mode ===
             "host" &&
@@ -1121,19 +1047,12 @@ function handleKeyboard(event) {
                 "move",
 
             dx,
-
             dy
         });
-
 
         return;
     }
 
-
-    /*
-     * Обычный игрок отправляет
-     * INPUT через WebRTC.
-     */
     if (
         state.mode ===
             "client" &&
@@ -1156,29 +1075,11 @@ INTERFACE
 function showHostInterface() {
     lobbyUI.showHost();
 
-
     elements.gameRoomCode.textContent =
         state.roomCode;
 
-
     elements.gamePlayerId.textContent =
         "HOST";
-
-
-    setupHostNetworkHandlers();
-
-
-    /*
-     * Игра HOST уже активна.
-     * Но оставляем lobby HOST видимым,
-     * чтобы можно было обмениваться
-     * invitation/answer.
-     */
-}
-
-
-function showGame() {
-    lobbyUI.showGame();
 }
 
 
@@ -1193,11 +1094,9 @@ function setPlayerName() {
         elements.playerName.value
             .trim();
 
-
     state.playerName =
         name ||
         "Player";
-
 
     localStorage.setItem(
         "browser-game-player-name",
@@ -1218,14 +1117,13 @@ function loadPlayerName() {
 
 /*
 ============================================================
- INVITE HASH
+INVITE HASH
 ============================================================
 */
 
 function handleHashChange() {
     const invite =
         getInviteFromHash();
-
 
     if (
         invite &&
@@ -1246,56 +1144,55 @@ function getInviteFromHash() {
         return null;
     }
 
-
     const hash =
         location.hash.substring(
             1
         );
-
 
     const params =
         new URLSearchParams(
             hash
         );
 
-
-    const encoded =
+    const inviteData =
         params.get(
             "invite"
         );
 
+    if (inviteData) {
+        try {
+            return decodeData(
+                inviteData
+            );
+        }
+        catch (error) {
+            console.error(
+                "Invalid invitation:",
+                error
+            );
 
-    if (!encoded) {
-        return null;
+            return null;
+        }
     }
 
-
-    try {
-        return decodeData(
-            encoded
-        );
-    }
-    catch (error) {
-        console.error(
-            "Invalid invitation:",
-            error
-        );
-
-        return null;
-    }
+    return null;
 }
 
 
 /*
 ============================================================
- INVITE LINKS
+INVITE LINKS
 ============================================================
 */
 
-function createInviteLink(data) {
-    return createLink(
-        "invite",
-        {
+function createInviteLink(
+    data
+) {
+    const encoded =
+        encodeData({
+            type:
+                "invite",
+
             version:
                 1,
 
@@ -1307,15 +1204,25 @@ function createInviteLink(data) {
 
             offer:
                 data.offer
-        }
+        });
+
+    return (
+        location.origin +
+        location.pathname +
+        "#invite=" +
+        encoded
     );
 }
 
 
-function createAnswerLink(data) {
-    return createLink(
-        "answer",
-        {
+function createAnswerLink(
+    data
+) {
+    const encoded =
+        encodeData({
+            type:
+                "answer",
+
             version:
                 1,
 
@@ -1327,28 +1234,12 @@ function createAnswerLink(data) {
 
             answer:
                 data.answer
-        }
-    );
-}
-
-
-function createLink(
-    type,
-    data
-) {
-    const encoded =
-        encodeData({
-            type,
-            ...data
         });
-
 
     return (
         location.origin +
         location.pathname +
-        "#" +
-        type +
-        "=" +
+        "#answer=" +
         encoded
     );
 }
@@ -1363,70 +1254,78 @@ ANSWER DECODING
 function decodeDataFromText(
     text
 ) {
-    /*
-     * HOST receives a complete URL.
-     */
+    const value =
+        text.trim();
+
+    if (!value) {
+        throw new Error(
+            "Пустые данные."
+        );
+    }
+
     if (
-        text.startsWith(
+        value.startsWith(
             "http://"
         ) ||
-        text.startsWith(
+        value.startsWith(
             "https://"
         )
     ) {
         const url =
-            new URL(text);
+            new URL(value);
 
+        const hash =
+            url.hash.replace(
+                /^#/,
+                ""
+            );
+
+        const params =
+            new URLSearchParams(
+                hash
+            );
 
         const encoded =
-            url.hash
-                .replace(/^#/, "")
-                .replace(/^answer=/, "");
-
+            params.get(
+                "answer"
+            );
 
         if (!encoded) {
             throw new Error(
-                "Answer-ссылка пуста."
+                "Answer-ссылка пуста или некорректна."
             );
         }
-
 
         return decodeData(
             encoded
         );
     }
 
-
-    /*
-     * Также разрешаем вставить
-     * непосредственно encoded data.
-     */
     return decodeData(
-        text
+        value
     );
 }
 
 
 /*
 ============================================================
-BASE64 JSON
+BASE64URL JSON
 ============================================================
 */
 
-function encodeData(data) {
+function encodeData(
+    data
+) {
     const json =
         JSON.stringify(
             data
         );
 
-
     const bytes =
         new TextEncoder()
             .encode(json);
 
-
     let binary = "";
-
 
     for (
         const byte
@@ -1437,7 +1336,6 @@ function encodeData(data) {
                 byte
             );
     }
-
 
     return btoa(binary)
         .replace(
@@ -1455,9 +1353,11 @@ function encodeData(data) {
 }
 
 
-function decodeData(data) {
+function decodeData(
+    data
+) {
     let normalized =
-        data
+        String(data)
             .replace(
                 /-/g,
                 "+"
@@ -1467,28 +1367,24 @@ function decodeData(data) {
                 "/"
             );
 
-
     while (
         normalized.length %
-        4 !==
+            4 !==
         0
     ) {
         normalized +=
             "=";
     }
 
-
     const binary =
         atob(
             normalized
         );
 
-
     const bytes =
         new Uint8Array(
             binary.length
         );
-
 
     for (
         let i = 0;
@@ -1498,7 +1394,6 @@ function decodeData(data) {
         bytes[i] =
             binary.charCodeAt(i);
     }
-
 
     return JSON.parse(
         new TextDecoder()
@@ -1517,20 +1412,16 @@ function createRoomCode() {
     const chars =
         "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 
-
     const bytes =
         new Uint32Array(
             8
         );
 
-
     crypto.getRandomValues(
         bytes
     );
 
-
     let value = "";
-
 
     for (
         const byte
@@ -1542,7 +1433,6 @@ function createRoomCode() {
                 chars.length
             ];
     }
-
 
     return (
         value.substring(0, 4) +
