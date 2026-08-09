@@ -15,54 +15,258 @@ import {
 } from "./game/server.js";
 
 import {
-    showHostLobby,
-    showClientLobby,
-    showGame,
-    setHostOffer,
-    getHostAnswer,
-    setClientAnswer,
-    setHostStatus,
-    setClientStatus,
-    renderPlayers,
-    getPlayerName
+    LobbyUI
 } from "./ui/lobby.js";
 
 import {
-    renderWorld
+    GameUI
 } from "./ui/game.js";
 
 
 /*
 ============================================================
-STATE
+DOM
 ============================================================
 */
 
-const roomCode =
-    createRoomCode();
+const elements = {
+    menu:
+        document.getElementById(
+            "lobbyMenu"
+        ),
 
+    hostLobby:
+        document.getElementById(
+            "hostLobby"
+        ),
 
-let gameServer = null;
+    clientLobby:
+        document.getElementById(
+            "clientLobby"
+        ),
 
-let hostNetwork = null;
+    game:
+        document.getElementById(
+            "gameSection"
+        ),
 
-let clientNetwork = null;
+    playerName:
+        document.getElementById(
+            "playerName"
+        ),
 
-let clientPlayerId = null;
+    hostButton:
+        document.getElementById(
+            "hostButton"
+        ),
 
-let currentSnapshot = null;
+    joinButton:
+        document.getElementById(
+            "joinButton"
+        ),
+
+    roomCode:
+        document.getElementById(
+            "roomCode"
+        ),
+
+    hostOffer:
+        document.getElementById(
+            "hostOffer"
+        ),
+
+    hostAnswer:
+        document.getElementById(
+            "hostAnswer"
+        ),
+
+    acceptAnswerButton:
+        document.getElementById(
+            "acceptAnswerButton"
+        ),
+
+    hostPlayers:
+        document.getElementById(
+            "hostPlayers"
+        ),
+
+    hostStatus:
+        document.getElementById(
+            "hostStatus"
+        ),
+
+    clientStatus:
+        document.getElementById(
+            "clientStatus"
+        ),
+
+    createAnswerButton:
+        document.getElementById(
+            "createAnswerButton"
+        ),
+
+    clientAnswer:
+        document.getElementById(
+            "clientAnswer"
+        ),
+
+    gameRoomCode:
+        document.getElementById(
+            "gameRoomCode"
+        ),
+
+    gamePlayerId:
+        document.getElementById(
+            "gamePlayerId"
+        ),
+
+    gameStatus:
+        document.getElementById(
+            "gameStatus"
+        ),
+
+    gameWorld:
+        document.getElementById(
+            "gameWorld"
+        )
+};
 
 
 /*
 ============================================================
-INITIAL UI
+UI
 ============================================================
 */
 
-document
-    .getElementById("roomCode")
-    .textContent =
-    roomCode;
+const lobbyUI =
+    new LobbyUI({
+        ...elements
+    });
+
+
+const gameUI =
+    new GameUI({
+        worldElement:
+            elements.gameWorld,
+
+        playersElement:
+            elements.hostPlayers
+    });
+
+
+/*
+============================================================
+APPLICATION STATE
+============================================================
+*/
+
+const state = {
+    mode:
+        "menu",
+
+    roomCode:
+        null,
+
+    gameServer:
+        null,
+
+    hostNetwork:
+        null,
+
+    clientNetwork:
+        null,
+
+    playerId:
+        null,
+
+    playerName:
+        "Player",
+
+    currentSnapshot:
+        null,
+
+    currentInvite:
+        null
+};
+
+
+/*
+============================================================
+INITIALIZATION
+============================================================
+*/
+
+initialize();
+
+
+function initialize() {
+    elements.playerName.value =
+        loadPlayerName();
+
+    bindEvents();
+
+    /*
+     * Если страница была открыта
+     * по invitation-ссылке HOST,
+     * сразу показываем экран подключения.
+     */
+    const invite =
+        getInviteFromHash();
+
+    if (invite) {
+        startClientFromInvite(
+            invite
+        );
+
+        return;
+    }
+
+    lobbyUI.showMenu();
+}
+
+
+/*
+============================================================
+EVENTS
+============================================================
+*/
+
+function bindEvents() {
+    elements.hostButton.addEventListener(
+        "click",
+        createRoom
+    );
+
+
+    elements.joinButton.addEventListener(
+        "click",
+        joinRoom
+    );
+
+
+    elements.acceptAnswerButton.addEventListener(
+        "click",
+        acceptPlayerAnswer
+    );
+
+
+    elements.createAnswerButton.addEventListener(
+        "click",
+        createClientAnswer
+    );
+
+
+    window.addEventListener(
+        "hashchange",
+        handleHashChange
+    );
+
+
+    document.addEventListener(
+        "keydown",
+        handleKeyboard
+    );
+}
 
 
 /*
@@ -71,196 +275,471 @@ HOST
 ============================================================
 */
 
-document
-    .getElementById("hostButton")
-    .onclick =
-    async () => {
-
-        gameServer =
-            new GameServer(
-                roomCode
-            );
+async function createRoom() {
+    if (
+        state.gameServer ||
+        state.hostNetwork
+    ) {
+        return;
+    }
 
 
-        gameServer.setHostName(
-            getPlayerName()
+    try {
+        setPlayerName();
+
+
+        state.mode =
+            "host";
+
+
+        state.roomCode =
+            createRoomCode();
+
+
+        state.gameServer =
+            new GameServer({
+                roomCode:
+                    state.roomCode,
+
+                maxPlayers:
+                    8
+            });
+
+
+        state.gameServer.setHostName(
+            state.playerName
         );
 
 
-        gameServer.onPlayerListChanged =
-            players => {
-
-                renderPlayers(
-                    players
-                );
-
-            };
+        setupGameServerHandlers();
 
 
-        gameServer.onSnapshot =
-            snapshot => {
-
-                currentSnapshot =
-                    snapshot;
-
-
-                renderWorld(
-                    snapshot,
-                    "HOST"
-                );
-
-            };
-
-
-        hostNetwork =
+        state.hostNetwork =
             new HostNetwork(
-                gameServer
+                state.gameServer
             );
 
 
-        showHostLobby(
-            roomCode
+        lobbyUI.setRoomCode(
+            state.roomCode
         );
 
 
-        showGame(
-            roomCode,
+        elements.gameRoomCode.textContent =
+            state.roomCode;
+
+
+        elements.gamePlayerId.textContent =
+            "HOST";
+
+
+        gameUI.setPlayerId(
             "HOST"
         );
 
 
-        renderWorld(
-            gameServer.world.snapshot(),
-            "HOST"
-        );
+        /*
+         * HOST сразу является игроком.
+         */
+        showHostInterface();
 
 
-        renderPlayers(
-            Object.values(
-                gameServer.world.players
-            )
-        );
+        renderHostState();
 
 
+        /*
+         * Создаём первое приглашение.
+         */
         await createHostInvite();
 
 
-        setHostStatus(
-            "Комната создана. Ты играешь как HOST."
+        lobbyUI.setHostStatus(
+            "Комната создана. Отправь приглашение игроку."
         );
-
-    };
-
-
-/*
-============================================================
-CREATE HOST INVITE
-============================================================
-*/
-
-async function createHostInvite() {
-
-    const offer =
-        await hostNetwork
-            .createInvite();
-
-
-    const link =
-        createLink(
-            "offer",
-            {
-
-                roomCode,
-
-                offer
-
-            }
+    }
+    catch (error) {
+        console.error(
+            "Failed to create room:",
+            error
         );
 
 
-    setHostOffer(
-        link
-    );
-
-
-    setHostStatus(
-        "Отправь эту ссылку игроку. После его ответа вставь Answer."
-    );
-
+        lobbyUI.setHostStatus(
+            `Ошибка: ${error.message}`
+        );
+    }
 }
 
 
 /*
 ============================================================
-ACCEPT PLAYER ANSWER
+HOST INVITE
 ============================================================
 */
 
-document
-    .getElementById(
-        "acceptAnswerButton"
-    )
-    .onclick =
-    async () => {
-
-        try {
-
-            const link =
-                getHostAnswer();
+async function createHostInvite() {
+    if (!state.hostNetwork) {
+        throw new Error(
+            "Host network is not initialized."
+        );
+    }
 
 
-            const data =
-                decodeLink(
-                    link
-                );
+    if (
+        state.gameServer.isFull()
+    ) {
+        lobbyUI.setHostStatus(
+            "Комната заполнена."
+        );
+
+        return null;
+    }
 
 
-            if (
-                data.type !==
-                "answer"
-            ) {
-
-                throw new Error(
-                    "Это не Answer"
-                );
-
-            }
+    const invite =
+        await state.hostNetwork
+            .createInvite();
 
 
-            await hostNetwork
-                .acceptAnswer(
-                    data.data
-                );
+    state.currentInvite =
+        invite;
 
 
-            setHostStatus(
-                "Игрок подключён. Создаю приглашение для следующего игрока..."
+    /*
+     * В invitation находятся:
+     *
+     * - roomCode
+     * - connectionId
+     * - WebRTC offer
+     */
+    const link =
+        createInviteLink({
+            roomCode:
+                state.roomCode,
+
+            connectionId:
+                invite.connectionId,
+
+            offer:
+                invite.offer
+        });
+
+
+    lobbyUI.setOffer(
+        link
+    );
+
+
+    return invite;
+}
+
+
+/*
+============================================================
+HOST ACCEPT ANSWER
+============================================================
+*/
+
+async function acceptPlayerAnswer() {
+    if (
+        !state.hostNetwork
+    ) {
+        return;
+    }
+
+
+    try {
+        const raw =
+            elements.hostAnswer.value
+                .trim();
+
+
+        if (!raw) {
+            throw new Error(
+                "Вставь Answer игрока."
+            );
+        }
+
+
+        const data =
+            decodeDataFromText(
+                raw
+            );
+
+
+        if (
+            data.type !==
+            "answer"
+        ) {
+            throw new Error(
+                "Это не Answer."
+            );
+        }
+
+
+        const connectionId =
+            data.connectionId ??
+            state.currentInvite
+                ?.connectionId ??
+            null;
+
+
+        await state.hostNetwork
+            .acceptAnswer(
+                data.answer,
+                connectionId
+            );
+
+
+        lobbyUI.setHostStatus(
+            "Answer принят. Ожидаю подключения игрока..."
+        );
+
+
+        elements.hostAnswer.value =
+            "";
+
+
+        /*
+         * Новое приглашение создаётся
+         * только после того, как текущее
+         * соединение успешно установлено.
+         *
+         * Это важно: иначе можно получить
+         * несколько одновременно ожидающих
+         * connection без понятного назначения.
+         */
+    }
+    catch (error) {
+        console.error(
+            "Failed to accept answer:",
+            error
+        );
+
+
+        lobbyUI.setHostStatus(
+            `Ошибка: ${error.message}`
+        );
+    }
+}
+
+
+/*
+============================================================
+HOST NETWORK EVENTS
+============================================================
+*/
+
+function setupHostNetworkHandlers() {
+    if (!state.hostNetwork) {
+        return;
+    }
+
+
+    state.hostNetwork.on(
+        "playerConnection",
+        connection => {
+            lobbyUI.setHostStatus(
+                "Игрок подключился к WebRTC. Ожидаю регистрацию..."
             );
 
 
             /*
-             * Для следующего игрока
-             * создаётся отдельное WebRTC-соединение.
+             * После того как игрок действительно
+             * зарегистрируется через JOIN,
+             * GameServer обновит список игроков.
              */
-
-            await createHostInvite();
-
         }
-        catch (error) {
+    );
 
+
+    state.hostNetwork.on(
+        "connectionStateChange",
+        data => {
+            if (
+                data.state ===
+                "connected"
+            ) {
+                lobbyUI.setHostStatus(
+                    "WebRTC соединение установлено."
+                );
+            }
+        }
+    );
+
+
+    state.hostNetwork.on(
+        "connectionRemoved",
+        () => {
+            renderHostState();
+
+
+            if (
+                state.mode ===
+                "host"
+            ) {
+                lobbyUI.setHostStatus(
+                    "Игрок отключился."
+                );
+            }
+        }
+    );
+
+
+    state.hostNetwork.on(
+        "error",
+        data => {
             console.error(
-                error
+                "Host network error:",
+                data
             );
-
-
-            setHostStatus(
-                "Ошибка: " +
-                error.message
-            );
-
         }
+    );
+}
 
-    };
+
+/*
+============================================================
+GAME SERVER EVENTS
+============================================================
+*/
+
+function setupGameServerHandlers() {
+    const server =
+        state.gameServer;
+
+
+    server.onPlayerJoined =
+        player => {
+
+            renderHostState();
+
+
+            lobbyUI.setHostStatus(
+                `${player.name} подключился (${player.id}).`
+            );
+
+
+            /*
+             * После регистрации игрока
+             * готовим приглашение для следующего.
+             */
+            if (
+                !server.isFull()
+            ) {
+                createHostInvite()
+                    .catch(error => {
+                        console.error(
+                            "Failed to create next invite:",
+                            error
+                        );
+                    });
+            }
+        };
+
+
+    server.onPlayerLeft =
+        player => {
+
+            renderHostState();
+
+
+            if (player) {
+                lobbyUI.setHostStatus(
+                    `${player.name} отключился.`
+                );
+            }
+        };
+
+
+    server.onPlayerListChanged =
+        players => {
+
+            lobbyUI.setPlayers(
+                players
+            );
+
+
+            lobbyUI.setPlayerCount(
+                players.length,
+                server.maxPlayers
+            );
+
+
+            renderHostState();
+        };
+
+
+    server.onSnapshot =
+        snapshot => {
+
+            state.currentSnapshot =
+                snapshot;
+
+
+            gameUI.render(
+                snapshot
+            );
+        };
+
+
+    server.onRoomStateChanged =
+        roomState => {
+
+            lobbyUI.setPlayerCount(
+                roomState.playerCount,
+                roomState.maxPlayers
+            );
+        };
+}
+
+
+/*
+============================================================
+HOST STATE
+============================================================
+*/
+
+function renderHostState() {
+    if (
+        !state.gameServer
+    ) {
+        return;
+    }
+
+
+    const players =
+        state.gameServer.getPlayers();
+
+
+    lobbyUI.setPlayers(
+        players
+    );
+
+
+    lobbyUI.setPlayerCount(
+        players.length,
+        state.gameServer.maxPlayers
+    );
+
+
+    const snapshot =
+        state.gameServer.getSnapshot();
+
+
+    state.currentSnapshot =
+        snapshot;
+
+
+    gameUI.setPlayerId(
+        "HOST"
+    );
+
+
+    gameUI.render(
+        snapshot
+    );
+}
 
 
 /*
@@ -269,181 +748,235 @@ CLIENT
 ============================================================
 */
 
-document
-    .getElementById(
-        "joinButton"
-    )
-    .onclick =
-    async () => {
-
-        const encoded =
-            getHash(
-                "offer"
-            );
+function joinRoom() {
+    const invite =
+        getInviteFromHash();
 
 
-        if (!encoded) {
+    if (!invite) {
+        alert(
+            "Открой invitation-ссылку хоста."
+        );
 
-            alert(
-                "Открой ссылку приглашения хоста."
-            );
-
-            return;
-
-        }
+        return;
+    }
 
 
-        showClientLobby();
+    startClientFromInvite(
+        invite
+    );
+}
 
 
-        clientNetwork =
+async function startClientFromInvite(
+    invite
+) {
+    if (
+        state.clientNetwork
+    ) {
+        state.clientNetwork.close();
+    }
+
+
+    try {
+        setPlayerName();
+
+
+        state.mode =
+            "client";
+
+
+        state.roomCode =
+            invite.roomCode;
+
+
+        lobbyUI.showClient();
+
+
+        lobbyUI.setClientStatus(
+            `Комната ${invite.roomCode} найдена.`
+        );
+
+
+        elements.gameRoomCode.textContent =
+            invite.roomCode;
+
+
+        state.clientNetwork =
             new ClientNetwork();
 
 
-        setupClientHandlers();
+        setupClientNetworkHandlers();
 
 
-        try {
+        lobbyUI.setClientStatus(
+            "Создаю WebRTC-соединение..."
+        );
 
-            const invite =
-                decodeData(
-                    encoded
+
+        const answer =
+            await state.clientNetwork
+                .connect(
+                    invite.offer
                 );
 
 
-            if (
-                !invite.roomCode ||
-                !invite.offer
-            ) {
+        /*
+         * Answer передаётся HOST
+         * вручную через ссылку.
+         */
+        const answerLink =
+            createAnswerLink({
+                roomCode:
+                    invite.roomCode,
 
-                throw new Error(
-                    "Некорректное приглашение"
-                );
+                connectionId:
+                    invite.connectionId,
 
-            }
-
-
-            setClientStatus(
-                `Комната ${invite.roomCode} найдена.`
-            );
-
-
-            const answer =
-                await clientNetwork
-                    .connect(
-                        invite.offer
-                    );
+                answer
+            });
 
 
-            const link =
-                createLink(
-                    "answer",
-                    answer
-                );
+        lobbyUI.setClientAnswer(
+            answerLink
+        );
 
 
-            setClientAnswer(
-                link
-            );
+        lobbyUI.setClientStatus(
+            "Answer создан. Отправь его хосту."
+        );
 
 
-            setClientStatus(
-                "Answer создан. Отправь его хосту."
-            );
-
-        }
-        catch (error) {
-
-            console.error(
-                error
-            );
+        elements.createAnswerButton.disabled =
+            true;
+    }
+    catch (error) {
+        console.error(
+            "Failed to connect to room:",
+            error
+        );
 
 
-            setClientStatus(
-                "Ошибка: " +
-                error.message
-            );
-
-        }
-
-    };
+        lobbyUI.setClientStatus(
+            `Ошибка: ${error.message}`
+        );
+    }
+}
 
 
 /*
 ============================================================
-CLIENT HANDLERS
+CLIENT ANSWER BUTTON
 ============================================================
 */
 
-function setupClientHandlers() {
+async function createClientAnswer() {
+    const invite =
+        getInviteFromHash();
 
-    clientNetwork.on(
+
+    if (!invite) {
+        lobbyUI.setClientStatus(
+            "Invitation-ссылка не найдена."
+        );
+
+        return;
+    }
+
+
+    await startClientFromInvite(
+        invite
+    );
+}
+
+
+/*
+============================================================
+CLIENT NETWORK EVENTS
+============================================================
+*/
+
+function setupClientNetworkHandlers() {
+    const client =
+        state.clientNetwork;
+
+
+    client.on(
         "connected",
         () => {
 
-            setClientStatus(
-                "WebRTC подключён. Регистрируем игрока..."
+            lobbyUI.setClientStatus(
+                "WebRTC подключён. Регистрирую игрока..."
             );
 
 
-            clientNetwork.join(
-                getPlayerName()
+            client.join(
+                state.playerName
             );
-
         }
     );
 
 
-    clientNetwork.on(
+    client.on(
         MESSAGE.WELCOME,
         message => {
 
-            clientPlayerId =
+            state.playerId =
                 message.playerId;
 
 
-            currentSnapshot =
+            state.roomCode =
+                message.roomCode;
+
+
+            state.currentSnapshot =
                 message.snapshot;
 
 
-            showGame(
-                message.roomCode,
-                clientPlayerId
+            elements.gameRoomCode.textContent =
+                message.roomCode;
+
+
+            elements.gamePlayerId.textContent =
+                message.playerId;
+
+
+            gameUI.setPlayerId(
+                message.playerId
             );
 
 
-            renderWorld(
-                currentSnapshot,
-                clientPlayerId
+            gameUI.render(
+                message.snapshot
             );
 
 
-            setClientStatus(
-                `Подключено к комнате ${message.roomCode}`
-            );
+            lobbyUI.showGame();
 
+
+            lobbyUI.setClientStatus(
+                `Подключено к комнате ${message.roomCode}.`
+            );
         }
     );
 
 
-    clientNetwork.on(
+    client.on(
         MESSAGE.SNAPSHOT,
         message => {
 
-            currentSnapshot =
+            state.currentSnapshot =
                 message.snapshot;
 
 
-            renderWorld(
-                currentSnapshot,
-                clientPlayerId
+            gameUI.render(
+                message.snapshot
             );
-
         }
     );
 
 
-    clientNetwork.on(
+    client.on(
         MESSAGE.PLAYER_JOINED,
         message => {
 
@@ -451,12 +984,11 @@ function setupClientHandlers() {
                 "Player joined:",
                 message.player
             );
-
         }
     );
 
 
-    clientNetwork.on(
+    client.on(
         MESSAGE.PLAYER_LEFT,
         message => {
 
@@ -464,166 +996,261 @@ function setupClientHandlers() {
                 "Player left:",
                 message.playerId
             );
-
         }
     );
 
 
-    clientNetwork.on(
+    client.on(
+        MESSAGE.ERROR,
+        message => {
+
+            lobbyUI.setClientStatus(
+                `Ошибка сервера: ${message.message ?? "unknown error"}`
+            );
+        }
+    );
+
+
+    client.on(
         "disconnected",
         () => {
 
-            setClientStatus(
-                "Соединение с хостом потеряно."
+            lobbyUI.setClientStatus(
+                "Соединение с HOST потеряно."
             );
-
         }
     );
 
+
+    client.on(
+        "connectionStateChange",
+        stateValue => {
+
+            console.log(
+                "Client connection state:",
+                stateValue
+            );
+        }
+    );
+
+
+    client.on(
+        "error",
+        error => {
+
+            console.error(
+                "Client network error:",
+                error
+            );
+        }
+    );
 }
 
 
 /*
 ============================================================
-MOVEMENT
+KEYBOARD / MOVEMENT
 ============================================================
 */
 
-document.addEventListener(
-    "keydown",
-    event => {
-
-        let dx = 0;
-
-        let dy = 0;
-
-
-        switch (
-            event.key.toLowerCase()
-        ) {
-
-            case "w":
-            case "arrowup":
-
-                dy = -1;
-
-                break;
+function handleKeyboard(event) {
+    /*
+     * Не перехватываем клавиатуру,
+     * когда пользователь печатает.
+     */
+    const target =
+        event.target;
 
 
-            case "s":
-            case "arrowdown":
-
-                dy = 1;
-
-                break;
-
-
-            case "a":
-            case "arrowleft":
-
-                dx = -1;
-
-                break;
-
-
-            case "d":
-            case "arrowright":
-
-                dx = 1;
-
-                break;
-
-
-            default:
-
-                return;
-
-        }
-
-
-        event.preventDefault();
-
-
-        /*
-         * HOST управляет своим игроком
-         * непосредственно через GameServer.
-         */
-
-        if (gameServer) {
-
-            gameServer.hostInput({
-
-                type:
-                    MESSAGE.INPUT,
-
-                action:
-                    "move",
-
-                dx,
-
-                dy
-
-            });
-
-            return;
-
-        }
-
-
-        /*
-         * Обычный игрок отправляет
-         * input через WebRTC.
-         */
-
-        if (clientNetwork) {
-
-            clientNetwork.move(
-                dx,
-                dy
-            );
-
-        }
-
+    if (
+        target instanceof
+            HTMLInputElement ||
+        target instanceof
+            HTMLTextAreaElement
+    ) {
+        return;
     }
-);
+
+
+    let dx = 0;
+    let dy = 0;
+
+
+    switch (
+        event.key.toLowerCase()
+    ) {
+        case "w":
+        case "arrowup":
+            dy = -1;
+            break;
+
+        case "s":
+        case "arrowdown":
+            dy = 1;
+            break;
+
+        case "a":
+        case "arrowleft":
+            dx = -1;
+            break;
+
+        case "d":
+        case "arrowright":
+            dx = 1;
+            break;
+
+        default:
+            return;
+    }
+
+
+    event.preventDefault();
+
+
+    /*
+     * HOST управляет собой
+     * непосредственно через GameServer.
+     */
+    if (
+        state.mode ===
+            "host" &&
+        state.gameServer
+    ) {
+        state.gameServer.hostInput({
+            action:
+                "move",
+
+            dx,
+
+            dy
+        });
+
+
+        return;
+    }
+
+
+    /*
+     * Обычный игрок отправляет
+     * INPUT через WebRTC.
+     */
+    if (
+        state.mode ===
+            "client" &&
+        state.clientNetwork
+    ) {
+        state.clientNetwork.move(
+            dx,
+            dy
+        );
+    }
+}
 
 
 /*
 ============================================================
-INVITE / LINK
+INTERFACE
 ============================================================
 */
 
-function createLink(
-    type,
-    data
-) {
+function showHostInterface() {
+    lobbyUI.showHost();
 
-    return (
-        location.origin +
-        location.pathname +
-        "#" +
-        type +
-        "=" +
-        encodeData(data)
-    );
 
+    elements.gameRoomCode.textContent =
+        state.roomCode;
+
+
+    elements.gamePlayerId.textContent =
+        "HOST";
+
+
+    setupHostNetworkHandlers();
+
+
+    /*
+     * Игра HOST уже активна.
+     * Но оставляем lobby HOST видимым,
+     * чтобы можно было обмениваться
+     * invitation/answer.
+     */
 }
 
 
-function decodeLink(link) {
+function showGame() {
+    lobbyUI.showGame();
+}
+
+
+/*
+============================================================
+PLAYER NAME
+============================================================
+*/
+
+function setPlayerName() {
+    const name =
+        elements.playerName.value
+            .trim();
+
+
+    state.playerName =
+        name ||
+        "Player";
+
+
+    localStorage.setItem(
+        "browser-game-player-name",
+        state.playerName
+    );
+}
+
+
+function loadPlayerName() {
+    return (
+        localStorage.getItem(
+            "browser-game-player-name"
+        ) ||
+        "Player"
+    );
+}
+
+
+/*
+============================================================
+ INVITE HASH
+============================================================
+*/
+
+function handleHashChange() {
+    const invite =
+        getInviteFromHash();
+
+
+    if (
+        invite &&
+        state.mode ===
+            "menu"
+    ) {
+        startClientFromInvite(
+            invite
+        );
+    }
+}
+
+
+function getInviteFromHash() {
+    if (
+        !location.hash
+    ) {
+        return null;
+    }
+
 
     const hash =
-        link.split("#")[1];
-
-
-    if (!hash) {
-
-        throw new Error(
-            "Ссылка не содержит данных"
+        location.hash.substring(
+            1
         );
-
-    }
 
 
     const params =
@@ -632,32 +1259,165 @@ function decodeLink(link) {
         );
 
 
-    const type =
-        [...params.keys()][0];
-
-
     const encoded =
-        params.get(type);
+        params.get(
+            "invite"
+        );
 
 
-    return {
+    if (!encoded) {
+        return null;
+    }
 
-        type,
 
-        data:
-            decodeData(
-                encoded
-            )
+    try {
+        return decodeData(
+            encoded
+        );
+    }
+    catch (error) {
+        console.error(
+            "Invalid invitation:",
+            error
+        );
 
-    };
-
+        return null;
+    }
 }
 
 
-function encodeData(data) {
+/*
+============================================================
+ INVITE LINKS
+============================================================
+*/
 
+function createInviteLink(data) {
+    return createLink(
+        "invite",
+        {
+            version:
+                1,
+
+            roomCode:
+                data.roomCode,
+
+            connectionId:
+                data.connectionId,
+
+            offer:
+                data.offer
+        }
+    );
+}
+
+
+function createAnswerLink(data) {
+    return createLink(
+        "answer",
+        {
+            version:
+                1,
+
+            roomCode:
+                data.roomCode,
+
+            connectionId:
+                data.connectionId,
+
+            answer:
+                data.answer
+        }
+    );
+}
+
+
+function createLink(
+    type,
+    data
+) {
+    const encoded =
+        encodeData({
+            type,
+            ...data
+        });
+
+
+    return (
+        location.origin +
+        location.pathname +
+        "#" +
+        type +
+        "=" +
+        encoded
+    );
+}
+
+
+/*
+============================================================
+ANSWER DECODING
+============================================================
+*/
+
+function decodeDataFromText(
+    text
+) {
+    /*
+     * HOST receives a complete URL.
+     */
+    if (
+        text.startsWith(
+            "http://"
+        ) ||
+        text.startsWith(
+            "https://"
+        )
+    ) {
+        const url =
+            new URL(text);
+
+
+        const encoded =
+            url.hash
+                .replace(/^#/, "")
+                .replace(/^answer=/, "");
+
+
+        if (!encoded) {
+            throw new Error(
+                "Answer-ссылка пуста."
+            );
+        }
+
+
+        return decodeData(
+            encoded
+        );
+    }
+
+
+    /*
+     * Также разрешаем вставить
+     * непосредственно encoded data.
+     */
+    return decodeData(
+        text
+    );
+}
+
+
+/*
+============================================================
+BASE64 JSON
+============================================================
+*/
+
+function encodeData(data) {
     const json =
-        JSON.stringify(data);
+        JSON.stringify(
+            data
+        );
 
 
     const bytes =
@@ -669,44 +1429,59 @@ function encodeData(data) {
 
 
     for (
-        const byte of bytes
+        const byte
+        of bytes
     ) {
-
         binary +=
             String.fromCharCode(
                 byte
             );
-
     }
 
 
     return btoa(binary)
-        .replace(/\+/g, "-")
-        .replace(/\//g, "_")
-        .replace(/=/g, "");
-
+        .replace(
+            /\+/g,
+            "-"
+        )
+        .replace(
+            /\//g,
+            "_"
+        )
+        .replace(
+            /=/g,
+            ""
+        );
 }
 
 
 function decodeData(data) {
-
-    data =
+    let normalized =
         data
-            .replace(/-/g, "+")
-            .replace(/_/g, "/");
+            .replace(
+                /-/g,
+                "+"
+            )
+            .replace(
+                /_/g,
+                "/"
+            );
 
 
     while (
-        data.length % 4
+        normalized.length %
+        4 !==
+        0
     ) {
-
-        data += "=";
-
+        normalized +=
+            "=";
     }
 
 
     const binary =
-        atob(data);
+        atob(
+            normalized
+        );
 
 
     const bytes =
@@ -720,38 +1495,15 @@ function decodeData(data) {
         i < binary.length;
         i++
     ) {
-
         bytes[i] =
             binary.charCodeAt(i);
-
     }
 
 
     return JSON.parse(
-
         new TextDecoder()
             .decode(bytes)
-
     );
-
-}
-
-
-function getHash(name) {
-
-    const hash =
-        location.hash;
-
-
-    if (!hash) {
-        return null;
-    }
-
-
-    return new URLSearchParams(
-        hash.substring(1)
-    ).get(name);
-
 }
 
 
@@ -762,35 +1514,39 @@ ROOM CODE
 */
 
 function createRoomCode() {
-
     const chars =
         "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 
 
-    let result = "";
+    const bytes =
+        new Uint32Array(
+            8
+        );
+
+
+    crypto.getRandomValues(
+        bytes
+    );
+
+
+    let value = "";
 
 
     for (
-        let i = 0;
-        i < 8;
-        i++
+        const byte
+        of bytes
     ) {
-
-        result +=
+        value +=
             chars[
-                Math.floor(
-                    Math.random() *
-                    chars.length
-                )
+                byte %
+                chars.length
             ];
-
     }
 
 
     return (
-        result.substring(0, 4) +
+        value.substring(0, 4) +
         "-" +
-        result.substring(4)
+        value.substring(4)
     );
-
 }
