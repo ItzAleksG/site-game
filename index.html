@@ -3,7 +3,6 @@
 
 <head>
     <meta charset="UTF-8">
-
     <meta
         name="viewport"
         content="width=device-width, initial-scale=1.0"
@@ -23,16 +22,11 @@
 <main class="container">
 
     <header class="page-header">
-
-        <h1>
-            Browser Game
-        </h1>
-
+        <h1>Browser Game</h1>
         <p>
             Игровой сервер работает
             прямо в браузере HOST.
         </p>
-
     </header>
 
 
@@ -47,11 +41,7 @@
         <!-- ============================== -->
 
         <div id="lobbyMenu">
-
-            <h2>
-                Лобби
-            </h2>
-
+            <h2>Лобби</h2>
 
             <label for="playerName">
                 Имя игрока
@@ -66,9 +56,7 @@
                 value="Player"
             >
 
-
             <div class="buttons">
-
                 <button
                     id="hostButton"
                     type="button"
@@ -76,16 +64,13 @@
                     Создать комнату
                 </button>
 
-
                 <button
                     id="joinButton"
                     type="button"
                 >
                     Подключиться
                 </button>
-
             </div>
-
         </div>
 
 
@@ -97,44 +82,24 @@
             id="hostLobby"
             class="hidden"
         >
-
-            <h2>
-                Комната HOST
-            </h2>
-
+            <h2>Комната HOST</h2>
 
             <div class="roomCode">
-
-                <span>
-                    Код комнаты
-                </span>
-
-                <strong id="roomCode">
-                    -
-                </strong>
-
+                <span>Код комнаты</span>
+                <strong id="roomCode">-</strong>
             </div>
 
-
             <div class="notice">
-
                 HOST является первым игроком
                 комнаты и запускает игровую
                 логику.
-
             </div>
 
-
-            <h3>
-                Приглашение игрока
-            </h3>
-
+            <h3>Приглашение игрока</h3>
 
             <p class="muted">
-                Скопируй ссылку и отправь
-                её игроку.
+                Скопируй ссылку и отправь её игроку.
             </p>
-
 
             <textarea
                 id="hostOffer"
@@ -143,18 +108,13 @@
                 placeholder="Здесь появится invitation-ссылка"
             ></textarea>
 
-
-            <h3>
-                Answer игрока
-            </h3>
-
+            <h3>Answer игрока</h3>
 
             <textarea
                 id="hostAnswer"
                 spellcheck="false"
                 placeholder="Вставь сюда Answer-ссылку игрока"
             ></textarea>
-
 
             <button
                 id="acceptAnswerButton"
@@ -163,36 +123,17 @@
                 Подключить игрока
             </button>
 
-
             <div class="status">
-
-                <strong>
-                    Статус
-                </strong>
-
-                <p id="hostStatus">
-                    -
-                </p>
-
+                <strong>Статус</strong>
+                <p id="hostStatus">-</p>
             </div>
-
 
             <div class="players-header">
-
-                <h3>
-                    Игроки
-                </h3>
-
-                <span id="playerCount">
-                    0/8
-                </span>
-
+                <h3>Игроки</h3>
+                <span id="playerCount">0/8</span>
             </div>
 
-
-            <div id="hostPlayers">
-            </div>
-
+            <div id="hostPlayers"></div>
         </div>
 
 
@@ -204,24 +145,27 @@
             id="clientLobby"
             class="hidden"
         >
+            <h2>Подключение</h2>
 
-            <h2>
-                Подключение
-            </h2>
+            <label for="clientPlayerName">
+                Твой ник
+            </label>
 
+            <input
+                id="clientPlayerName"
+                type="text"
+                maxlength="24"
+                autocomplete="nickname"
+                placeholder="Имя игрока"
+                value="Player"
+            >
 
             <div class="status">
-
-                <strong>
-                    Статус
-                </strong>
-
+                <strong>Статус</strong>
                 <p id="clientStatus">
                     Подготовка...
                 </p>
-
             </div>
-
 
             <button
                 id="createAnswerButton"
@@ -230,16 +174,11 @@
                 Создать Answer
             </button>
 
-
-            <h3>
-                Твой Answer
-            </h3>
-
+            <h3>Твой Answer</h3>
 
             <p class="muted">
                 Отправь эту ссылку HOST.
             </p>
-
 
             <textarea
                 id="clientAnswer"
@@ -247,7 +186,6 @@
                 spellcheck="false"
                 placeholder="Здесь появится Answer-ссылка"
             ></textarea>
-
         </div>
 
     </section>
@@ -261,67 +199,35 @@
         id="gameSection"
         class="hidden"
     >
-
         <div class="gameHeader">
-
             <div>
-
-                <span>
-                    Комната
-                </span>
-
-                <strong id="gameRoomCode">
-                    -
-                </strong>
-
+                <span>Комната</span>
+                <strong id="gameRoomCode">-</strong>
             </div>
 
-
             <div>
-
-                <span>
-                    Игрок
-                </span>
-
-                <strong id="gamePlayerId">
-                    -
-                </strong>
-
+                <span>Игрок</span>
+                <strong id="gamePlayerId">-</strong>
             </div>
-
         </div>
-
 
         <div
             id="gameWorld"
             aria-label="Игровой мир"
-        >
-        </div>
-
+        ></div>
 
         <div class="controls">
-
-            <strong>
-                Управление
-            </strong>
-
-            <span>
-                WASD / стрелки — движение
-            </span>
-
+            <strong>Управление</strong>
+            <span>WASD / стрелки — движение</span>
         </div>
-
 
         <p
             id="gameStatus"
             class="game-status"
-        >
-        </p>
-
+        ></p>
     </section>
 
 </main>
-
 
 <script
     type="module"
@@ -329,5 +235,4 @@
 ></script>
 
 </body>
-
 </html>
