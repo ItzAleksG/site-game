@@ -10,36 +10,15 @@ import {
 
 
 export class GameServer {
-    constructor(
-        options = {}
-    ) {
-        /*
-         * Поддерживаем оба варианта:
-         *
-         * new GameServer("ROOM")
-         *
-         * new GameServer({
-         *     roomCode: "ROOM",
-         *     maxPlayers: 8
-         * })
-         */
-        if (
-            typeof options ===
-            "string"
-        ) {
+    constructor(options = {}) {
+        if (typeof options === "string") {
             options = {
-                roomCode:
-                    options
+                roomCode: options
             };
         }
 
-
         this.roomCode =
-            String(
-                options.roomCode ||
-                ""
-            );
-
+            String(options.roomCode || "");
 
         if (!this.roomCode) {
             throw new Error(
@@ -47,61 +26,43 @@ export class GameServer {
             );
         }
 
-
-        this.maxPlayers =
-            Math.max(
-                1,
-                Number(
-                    options.maxPlayers
-                ) || 8
-            );
-
-
-        this.world =
-            new World();
-
-
-        /*
-         * playerId -> connection
-         *
-         * HOST здесь отсутствует,
-         * потому что HOST находится
-         * непосредственно внутри браузера.
-         */
-        this.connections =
-            new Map();
-
-
-        this.nextPlayerNumber =
-            1;
-
-
-        /*
-         * Колбэки UI / application layer.
-         */
-        this.onPlayerJoined =
-            null;
-
-        this.onPlayerLeft =
-            null;
-
-        this.onPlayerListChanged =
-            null;
-
-        this.onSnapshot =
-            null;
-
-        this.onRoomStateChanged =
-            null;
-
-
-        /*
-         * HOST — первый игрок.
-         */
-        this.world.addPlayer(
-            "HOST",
-            "Host"
+        this.maxPlayers = Math.max(
+            1,
+            Number(options.maxPlayers) || 8
         );
+
+        this.world = new World(
+            options.world || {}
+        );
+
+        /*
+         * playerId -> WebRTC connection
+         *
+         * HOST сюда не попадает:
+         * HOST находится непосредственно
+         * внутри браузера и управляется
+         * через hostInput().
+         */
+        this.connections = new Map();
+
+        this.nextPlayerNumber = 1;
+
+        /*
+         * Application/UI callbacks.
+         */
+        this.onPlayerJoined = null;
+        this.onPlayerLeft = null;
+        this.onPlayerListChanged = null;
+        this.onSnapshot = null;
+        this.onRoomStateChanged = null;
+
+        /*
+         * HOST — первый игрок комнаты.
+         */
+        this.world.addPlayer({
+            id: "HOST",
+            name: "Host"
+        });
     }
 
 
@@ -111,38 +72,33 @@ export class GameServer {
     ============================================================
     */
 
-    setHostName(
-        name
-    ) {
+    setHostName(name) {
         const host =
-            this.world.getPlayer(
-                "HOST"
-            );
-
+            this.world.getPlayer("HOST");
 
         if (!host) {
-            return;
+            return false;
         }
 
-
         host.name =
-            sanitizeName(
-                name
-            );
-
+            sanitizeName(name);
 
         this.notifyPlayerListChanged();
         this.notifySnapshot();
+        this.notifyRoomState();
+
+        return true;
     }
 
 
-    hostInput(
-        message
-    ) {
-        this.input(
+    hostInput(message) {
+        if (!message) {
+            return false;
+        }
+
+        return this.input(
             {
-                playerId:
-                    "HOST"
+                playerId: "HOST"
             },
             message
         );
@@ -156,16 +112,12 @@ export class GameServer {
     */
 
     getPlayerCount() {
-        return Object.keys(
-            this.world.players
-        ).length;
+        return this.world.players.size;
     }
 
 
     getPlayers() {
-        return Object.values(
-            this.world.players
-        );
+        return this.world.getPlayers();
     }
 
 
@@ -201,24 +153,17 @@ export class GameServer {
 
     /*
     ============================================================
-    CONNECTION
+    NETWORK INPUT
     ============================================================
     */
 
-    receive(
-        connection,
-        raw
-    ) {
+    receive(connection, raw) {
         if (!connection) {
             return;
         }
 
-
         const message =
-            parseMessage(
-                raw
-            );
-
+            parseMessage(raw);
 
         if (!message) {
             this.sendError(
@@ -229,27 +174,20 @@ export class GameServer {
             return;
         }
 
-
-        switch (
-            message.type
-        ) {
+        switch (message.type) {
             case MESSAGE.JOIN:
                 this.join(
                     connection,
                     message
                 );
-
                 break;
-
 
             case MESSAGE.INPUT:
                 this.input(
                     connection,
                     message
                 );
-
                 break;
-
 
             case MESSAGE.PING:
                 this.send(
@@ -262,16 +200,13 @@ export class GameServer {
                         }
                     )
                 );
-
                 break;
-
 
             default:
                 this.sendError(
                     connection,
                     `Unknown message type: ${message.type}`
                 );
-
                 break;
         }
     }
@@ -283,16 +218,15 @@ export class GameServer {
     ============================================================
     */
 
-    join(
-        connection,
-        message
-    ) {
+    join(connection, message) {
+        if (!connection) {
+            return;
+        }
+
         /*
-         * Повторный JOIN запрещён.
+         * Защита от повторного JOIN.
          */
-        if (
-            connection.playerId
-        ) {
+        if (connection.playerId) {
             this.sendError(
                 connection,
                 "Player is already registered."
@@ -301,14 +235,10 @@ export class GameServer {
             return;
         }
 
-
         /*
-         * Не разрешаем превысить
-         * максимальный размер комнаты.
+         * HOST уже занимает один слот.
          */
-        if (
-            this.isFull()
-        ) {
+        if (this.isFull()) {
             this.sendError(
                 connection,
                 "Room is full."
@@ -317,38 +247,32 @@ export class GameServer {
             return;
         }
 
-
         const playerId =
             `P-${this.nextPlayerNumber++}`;
 
-
         const name =
-            sanitizeName(
-                message.name
-            );
+            sanitizeName(message.name);
 
+        /*
+         * Сначала создаём игрока в World.
+         */
+        const player =
+            this.world.addPlayer({
+                id: playerId,
+                name
+            });
 
+        /*
+         * Только после успешного создания
+         * регистрируем connection.
+         */
         connection.playerId =
             playerId;
-
 
         this.connections.set(
             playerId,
             connection
         );
-
-
-        this.world.addPlayer(
-            playerId,
-            name
-        );
-
-
-        const player =
-            this.world.getPlayer(
-                playerId
-            );
-
 
         /*
         --------------------------------------------------------
@@ -372,10 +296,9 @@ export class GameServer {
             )
         );
 
-
         /*
         --------------------------------------------------------
-        PLAYER JOINED
+        PLAYER_JOINED
         --------------------------------------------------------
         */
 
@@ -388,7 +311,6 @@ export class GameServer {
             ),
             playerId
         );
-
 
         /*
         --------------------------------------------------------
@@ -405,9 +327,8 @@ export class GameServer {
             );
         }
 
-
         this.notifyPlayerListChanged();
-        this.broadcastSnapshot();
+        this.notifySnapshot();
         this.notifyRoomState();
     }
 
@@ -418,13 +339,13 @@ export class GameServer {
     ============================================================
     */
 
-    input(
-        connection,
-        message
-    ) {
-        const playerId =
-            connection?.playerId;
+    input(connection, message) {
+        if (!connection) {
+            return false;
+        }
 
+        const playerId =
+            connection.playerId;
 
         if (!playerId) {
             this.sendError(
@@ -432,39 +353,35 @@ export class GameServer {
                 "Player is not registered."
             );
 
-            return;
+            return false;
         }
 
-
-        /*
-         * Пока у нас есть только движение.
-         *
-         * В дальнейшем сюда добавятся:
-         *
-         * attack
-         * interact
-         * use_item
-         * etc.
-         */
         if (
             message.action !==
             "move"
         ) {
-            return;
+            return false;
         }
 
+        const moved =
+            this.world.movePlayer(
+                playerId,
+                message.dx,
+                message.dy
+            );
 
-        this.world.movePlayer(
-            playerId,
-            message.dx,
-            message.dy
-        );
+        if (!moved) {
+            return false;
+        }
 
-
-        this.world.tick++;
-
+        /*
+         * World уже имеет собственный tick.
+         */
+        this.world.update();
 
         this.broadcastSnapshot();
+
+        return true;
     }
 
 
@@ -474,51 +391,37 @@ export class GameServer {
     ============================================================
     */
 
-    disconnect(
-        connection
-    ) {
+    disconnect(connection) {
         if (!connection) {
-            return;
+            return false;
         }
-
 
         const playerId =
             connection.playerId;
 
-
         if (!playerId) {
-            return;
+            return false;
         }
 
-
         /*
-         * Защита от повторного disconnect.
+         * Не позволяем повторно удалить
+         * одного и того же игрока.
          */
         connection.playerId =
             null;
 
-
         this.connections.delete(
             playerId
         );
-
 
         const player =
             this.world.getPlayer(
                 playerId
             );
 
-
         this.world.removePlayer(
             playerId
         );
-
-
-        /*
-        --------------------------------------------------------
-        PLAYER LEFT
-        --------------------------------------------------------
-        */
 
         this.broadcast(
             makeMessage(
@@ -529,7 +432,6 @@ export class GameServer {
             )
         );
 
-
         if (
             typeof this.onPlayerLeft ===
             "function"
@@ -539,10 +441,11 @@ export class GameServer {
             );
         }
 
-
         this.notifyPlayerListChanged();
-        this.broadcastSnapshot();
+        this.notifySnapshot();
         this.notifyRoomState();
+
+        return true;
     }
 
 
@@ -556,8 +459,7 @@ export class GameServer {
         const snapshot =
             this.world.snapshot();
 
-
-        this.broadcast(
+        const message =
             makeMessage(
                 MESSAGE.SNAPSHOT,
                 {
@@ -566,16 +468,16 @@ export class GameServer {
 
                     snapshot
                 }
-            )
-        );
-
+            );
 
         /*
-         * HOST не получает snapshot
-         * через WebRTC.
-         *
-         * Поэтому приложение HOST
-         * получает его напрямую.
+         * Отправляем всем WebRTC-клиентам.
+         */
+        this.broadcast(message);
+
+        /*
+         * HOST получает snapshot
+         * напрямую, без WebRTC.
          */
         if (
             typeof this.onSnapshot ===
@@ -602,21 +504,17 @@ export class GameServer {
 
     /*
     ============================================================
-    PLAYERS
+    PLAYER LIST
     ============================================================
     */
 
     notifyPlayerListChanged() {
-        const players =
-            this.getPlayers();
-
-
         if (
             typeof this.onPlayerListChanged ===
             "function"
         ) {
             this.onPlayerListChanged(
-                players
+                this.getPlayers()
             );
         }
     }
@@ -636,6 +534,43 @@ export class GameServer {
 
     /*
     ============================================================
+    SEND
+    ============================================================
+    */
+
+    send(connection, message) {
+        if (!connection) {
+            return false;
+        }
+
+        const channel =
+            connection.channel;
+
+        if (
+            !channel ||
+            channel.readyState !==
+            "open"
+        ) {
+            return false;
+        }
+
+        try {
+            channel.send(message);
+            return true;
+        }
+        catch (error) {
+            console.error(
+                "GameServer.send failed:",
+                error
+            );
+
+            return false;
+        }
+    }
+
+
+    /*
+    ============================================================
     BROADCAST
     ============================================================
     */
@@ -644,6 +579,8 @@ export class GameServer {
         message,
         exceptPlayerId = null
     ) {
+        let sent = 0;
+
         for (
             const [
                 playerId,
@@ -658,58 +595,17 @@ export class GameServer {
                 continue;
             }
 
-
-            this.send(
-                connection,
-                message
-            );
-        }
-    }
-
-
-    /*
-    ============================================================
-    SEND
-    ============================================================
-    */
-
-    send(
-        connection,
-        message
-    ) {
-        if (!connection) {
-            return false;
+            if (
+                this.send(
+                    connection,
+                    message
+                )
+            ) {
+                sent++;
+            }
         }
 
-
-        const channel =
-            connection.channel;
-
-
-        if (
-            !channel ||
-            channel.readyState !==
-                "open"
-        ) {
-            return false;
-        }
-
-
-        try {
-            channel.send(
-                message
-            );
-
-            return true;
-        }
-        catch (error) {
-            console.error(
-                "GameServer.send failed:",
-                error
-            );
-
-            return false;
-        }
+        return sent;
     }
 
 
@@ -733,18 +629,41 @@ export class GameServer {
             )
         );
     }
+
+
+    /*
+    ============================================================
+    CLOSE
+    ============================================================
+    */
+
+    close() {
+        const connections =
+            [
+                ...this.connections.values()
+            ];
+
+        for (
+            const connection
+            of connections
+        ) {
+            this.disconnect(
+                connection
+            );
+        }
+
+        this.connections.clear();
+    }
 }
 
 
 /*
 ============================================================
-NAME SANITIZATION
+HELPERS
 ============================================================
 */
 
-function sanitizeName(
-    name
-) {
+function sanitizeName(name) {
     const value =
         String(
             name ?? ""
@@ -758,7 +677,6 @@ function sanitizeName(
             0,
             24
         );
-
 
     return (
         value ||
