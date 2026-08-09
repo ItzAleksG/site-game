@@ -4,6 +4,7 @@ import { ClientNetwork } from "./network/client.js";
 import { GameServer } from "./game/server.js";
 import { LobbyUI } from "./ui/lobby.js";
 import { GameUI } from "./ui/game.js";
+import { SIGNALING_URL } from "./config.js";
 
 
 const elements = {
@@ -15,6 +16,7 @@ const elements = {
     playerName: document.getElementById("playerName"),
     hostButton: document.getElementById("hostButton"),
     joinButton: document.getElementById("joinButton"),
+    joinRoomCode: document.getElementById("joinRoomCode"),
 
     roomCode: document.getElementById("roomCode"),
     offer: document.getElementById("hostOffer"),
@@ -24,6 +26,7 @@ const elements = {
     playerCount: document.getElementById("playerCount"),
     hostStatus: document.getElementById("hostStatus"),
 
+    clientRoomCode: document.getElementById("clientRoomCode"),
     clientPlayerName: document.getElementById("clientPlayerName"),
     clientStatus: document.getElementById("clientStatus"),
     createAnswerButton: document.getElementById("createAnswerButton"),
@@ -51,27 +54,32 @@ const state = {
     clientNetwork: null,
     playerId: null,
     playerName: "Player",
-    currentSnapshot: null,
     currentInvite: null
 };
+
+
+const automaticSignalingEnabled = Boolean(SIGNALING_URL);
 
 
 initialize();
 
 
 function initialize() {
-    const savedName = loadPlayerName();
-
-    elements.playerName.value = savedName;
-    elements.clientPlayerName.value = savedName;
+    elements.playerName.value = loadPlayerName();
+    elements.clientPlayerName.value = "";
 
     bindEvents();
 
+    const roomFromHash = getRoomCodeFromHash();
     const invite = getInviteFromHash();
 
     if (invite) {
         prepareClientFromInvite(invite);
         return;
+    }
+
+    if (roomFromHash) {
+        elements.joinRoomCode.value = roomFromHash;
     }
 
     lobbyUI.showMenu();
@@ -82,9 +90,8 @@ function bindEvents() {
     elements.hostButton.addEventListener("click", createRoom);
     elements.joinButton.addEventListener("click", joinRoom);
     elements.acceptAnswerButton.addEventListener("click", acceptPlayerAnswer);
-    elements.createAnswerButton.addEventListener("click", createClientAnswer);
+    elements.createAnswerButton.addEventListener("click", createClientConnection);
 
-    window.addEventListener("hashchange", handleHashChange);
     document.addEventListener("keydown", handleKeyboard);
 }
 
@@ -101,10 +108,9 @@ async function createRoom() {
     try {
         state.mode = "host";
         state.playerName = sanitizeName(elements.playerName.value);
+        state.roomCode = createRoomCode();
 
         savePlayerName(state.playerName);
-
-        state.roomCode = createRoomCode();
 
         state.gameServer = new GameServer({
             roomCode: state.roomCode,
@@ -121,29 +127,42 @@ async function createRoom() {
 
         elements.gameRoomCode.textContent = state.roomCode;
         elements.gamePlayerId.textContent = "HOST";
+        elements.roomCode.textContent = state.roomCode;
 
         gameUI.setPlayerId("HOST");
-
         showHostInterface();
         renderHostState();
 
-        await createHostInvite();
+        if (automaticSignalingEnabled) {
+            lobbyUI.setHostStatus("Подключаю комнату к сигнализации...");
 
-        lobbyUI.setHostStatus(
-            "Комната создана. Ты уже первый игрок. Отправь приглашение игроку."
-        );
+            await state.hostNetwork.connectSignaling(
+                SIGNALING_URL,
+                state.roomCode
+            );
+
+            lobbyUI.setHostStatus(
+                `Комната ${state.roomCode} создана. Ожидаю игроков.`
+            );
+        }
+        else {
+            await createHostInvite();
+
+            lobbyUI.setHostStatus(
+                `Комната ${state.roomCode} создана. Автоматическая сигнализация не настроена, используется ручное подключение.`
+            );
+        }
     }
     catch (error) {
         console.error("Failed to create room:", error);
 
         state.hostNetwork?.close();
-
         state.hostNetwork = null;
         state.gameServer = null;
         state.mode = "menu";
 
         lobbyUI.showMenu();
-        lobbyUI.setStatus(`Ошибка создания комнаты: ${error.message}`);
+        alert(`Ошибка создания комнаты: ${error.message}`);
     }
 }
 
@@ -154,12 +173,10 @@ async function createHostInvite() {
     }
 
     if (state.gameServer.isFull()) {
-        lobbyUI.setHostStatus("Комната заполнена.");
         return null;
     }
 
     const invite = await state.hostNetwork.createInvite();
-
     state.currentInvite = invite;
 
     lobbyUI.setOffer(createInviteLink({
@@ -173,9 +190,7 @@ async function createHostInvite() {
 
 
 async function acceptPlayerAnswer() {
-    if (!state.hostNetwork) {
-        return;
-    }
+    if (!state.hostNetwork) return;
 
     try {
         const raw = elements.hostAnswer.value.trim();
@@ -190,21 +205,13 @@ async function acceptPlayerAnswer() {
             throw new Error("Это не Answer.");
         }
 
-        const connectionId =
-            data.connectionId ??
-            state.currentInvite?.connectionId ??
-            null;
-
         await state.hostNetwork.acceptAnswer(
             data.answer,
-            connectionId
+            data.connectionId ?? state.currentInvite?.connectionId ?? null
         );
 
         elements.hostAnswer.value = "";
-
-        lobbyUI.setHostStatus(
-            "Answer принят. Ожидаю подключения игрока..."
-        );
+        lobbyUI.setHostStatus("Answer принят. Ожидаю подключения игрока...");
     }
     catch (error) {
         console.error("Failed to accept answer:", error);
@@ -215,10 +222,27 @@ async function acceptPlayerAnswer() {
 
 function setupHostNetworkHandlers() {
     const network = state.hostNetwork;
+    if (!network) return;
 
-    if (!network) {
-        return;
-    }
+    network.on("signalingConnected", () => {
+        lobbyUI.setHostStatus(
+            `Комната ${state.roomCode} доступна по коду. Ожидаю игроков.`
+        );
+    });
+
+    network.on("signalingDisconnected", () => {
+        if (state.mode === "host") {
+            lobbyUI.setHostStatus("Сигнализация отключена.");
+        }
+    });
+
+    network.on("inviteCreated", data => {
+        if (!automaticSignalingEnabled) return;
+
+        lobbyUI.setHostStatus(
+            `Подключаю игрока ${data.peerId} через WebRTC...`
+        );
+    });
 
     network.on("playerConnection", () => {
         lobbyUI.setHostStatus(
@@ -228,15 +252,12 @@ function setupHostNetworkHandlers() {
 
     network.on("connectionStateChange", data => {
         if (data.state === "connected") {
-            lobbyUI.setHostStatus(
-                "WebRTC соединение установлено."
-            );
+            lobbyUI.setHostStatus("WebRTC соединение установлено.");
         }
     });
 
     network.on("connectionRemoved", () => {
         renderHostState();
-        lobbyUI.setHostStatus("Игрок отключился.");
     });
 
     network.on("error", data => {
@@ -247,10 +268,7 @@ function setupHostNetworkHandlers() {
 
 function setupGameServerHandlers() {
     const server = state.gameServer;
-
-    if (!server) {
-        return;
-    }
+    if (!server) return;
 
     server.onPlayerJoined = player => {
         renderHostState();
@@ -259,7 +277,7 @@ function setupGameServerHandlers() {
             `${player.name} подключился (${player.id}).`
         );
 
-        if (!server.isFull()) {
+        if (!automaticSignalingEnabled && !server.isFull()) {
             createHostInvite().catch(error => {
                 console.error("Failed to create next invite:", error);
             });
@@ -270,9 +288,7 @@ function setupGameServerHandlers() {
         renderHostState();
 
         if (player) {
-            lobbyUI.setHostStatus(
-                `${player.name} отключился.`
-            );
+            lobbyUI.setHostStatus(`${player.name} отключился.`);
         }
     };
 
@@ -282,7 +298,6 @@ function setupGameServerHandlers() {
     };
 
     server.onSnapshot = snapshot => {
-        state.currentSnapshot = snapshot;
         gameUI.render(snapshot);
     };
 
@@ -296,20 +311,13 @@ function setupGameServerHandlers() {
 
 
 function renderHostState() {
-    if (!state.gameServer) {
-        return;
-    }
+    if (!state.gameServer) return;
 
     const players = state.gameServer.getPlayers();
     const snapshot = state.gameServer.getSnapshot();
 
     lobbyUI.setPlayers(players);
-    lobbyUI.setPlayerCount(
-        players.length,
-        state.gameServer.maxPlayers
-    );
-
-    state.currentSnapshot = snapshot;
+    lobbyUI.setPlayerCount(players.length, state.gameServer.maxPlayers);
 
     gameUI.setPlayerId("HOST");
     gameUI.render(snapshot);
@@ -317,17 +325,7 @@ function renderHostState() {
 
 
 function showHostInterface() {
-    /*
-     * HOST должен одновременно видеть:
-     * 1. панель управления комнатой;
-     * 2. игровое поле.
-     *
-     * LobbyUI специально переключает экраны,
-     * поэтому gameSection показываем здесь отдельно.
-     */
     lobbyUI.showHost();
-
-    elements.game.classList.remove("hidden");
 
     elements.gameRoomCode.textContent = state.roomCode;
     elements.gamePlayerId.textContent = "HOST";
@@ -339,23 +337,53 @@ function showHostInterface() {
    ============================================================ */
 
 function joinRoom() {
-    const invite = getInviteFromHash();
+    const roomCode = sanitizeRoomCode(elements.joinRoomCode.value);
 
-    if (!invite) {
-        alert("Открой invitation-ссылку хоста.");
+    if (roomCode) {
+        prepareClientForRoom(roomCode);
         return;
     }
 
-    prepareClientFromInvite(invite);
+    const invite = getInviteFromHash();
+
+    if (invite) {
+        prepareClientFromInvite(invite);
+        return;
+    }
+
+    alert("Введи код комнаты.");
+}
+
+
+function prepareClientForRoom(roomCode) {
+    state.mode = "client";
+    state.roomCode = roomCode;
+    state.currentInvite = null;
+
+    elements.clientRoomCode.textContent = roomCode;
+    elements.clientPlayerName.value = "";
+    elements.clientAnswer.value = "";
+    elements.createAnswerButton.disabled = false;
+
+    lobbyUI.showClient();
+
+    if (!automaticSignalingEnabled) {
+        lobbyUI.setClientStatus(
+            "Автоматическая сигнализация ещё не настроена. Укажи SIGNALING_URL в js/config.js."
+        );
+        return;
+    }
+
+    lobbyUI.setClientStatus(
+        `Комната ${roomCode} найдена. Введи ник и подключись.`
+    );
 }
 
 
 function prepareClientFromInvite(invite) {
     if (!invite?.offer) {
         lobbyUI.showClient();
-        lobbyUI.setClientStatus(
-            "Invitation не содержит WebRTC offer."
-        );
+        lobbyUI.setClientStatus("Invitation не содержит WebRTC offer.");
         return;
     }
 
@@ -363,34 +391,24 @@ function prepareClientFromInvite(invite) {
     state.roomCode = invite.roomCode ?? null;
     state.currentInvite = invite;
 
-    const savedName = loadPlayerName();
-
-    elements.clientPlayerName.value = savedName;
+    elements.clientRoomCode.textContent = state.roomCode ?? "-";
+    elements.clientPlayerName.value = "";
     elements.clientAnswer.value = "";
     elements.createAnswerButton.disabled = false;
 
     lobbyUI.showClient();
-
     lobbyUI.setClientStatus(
-        `Комната ${invite.roomCode ?? ""} найдена. Введи свой ник и создай Answer.`
+        `Ручное подключение к комнате ${invite.roomCode ?? ""}. Введи ник.`
     );
 }
 
 
-async function createClientAnswer() {
-    const invite = state.currentInvite ?? getInviteFromHash();
-
-    if (!invite?.offer) {
-        lobbyUI.setClientStatus(
-            "Invitation-ссылка не найдена или повреждена."
-        );
-        return;
-    }
-
+async function createClientConnection() {
     const name = sanitizeName(elements.clientPlayerName.value);
 
     elements.clientPlayerName.value = name;
     savePlayerName(name);
+    state.playerName = name;
 
     elements.createAnswerButton.disabled = true;
 
@@ -399,14 +417,32 @@ async function createClientAnswer() {
             state.clientNetwork.close();
         }
 
-        state.playerName = name;
         state.clientNetwork = new ClientNetwork();
-
         setupClientNetworkHandlers();
 
-        lobbyUI.setClientStatus(
-            "Создаю WebRTC-соединение..."
-        );
+        if (automaticSignalingEnabled && state.roomCode) {
+            lobbyUI.setClientStatus(
+                `Подключаюсь к комнате ${state.roomCode}...`
+            );
+
+            await state.clientNetwork.connectSignaling(
+                SIGNALING_URL,
+                state.roomCode
+            );
+
+            lobbyUI.setClientStatus(
+                "Ожидаю WebRTC offer от HOST..."
+            );
+            return;
+        }
+
+        const invite = state.currentInvite ?? getInviteFromHash();
+
+        if (!invite?.offer) {
+            throw new Error("Не найден invitation хоста.");
+        }
+
+        lobbyUI.setClientStatus("Создаю WebRTC-соединение...");
 
         const answer = await state.clientNetwork.connect(invite.offer);
 
@@ -417,29 +453,27 @@ async function createClientAnswer() {
         });
 
         lobbyUI.setClientAnswer(answerLink);
-
         lobbyUI.setClientStatus(
             `Answer создан для игрока «${name}». Отправь его HOST.`
         );
     }
     catch (error) {
         console.error("Failed to connect to room:", error);
-
         elements.createAnswerButton.disabled = false;
-
-        lobbyUI.setClientStatus(
-            `Ошибка: ${error.message}`
-        );
+        lobbyUI.setClientStatus(`Ошибка: ${error.message}`);
     }
 }
 
 
 function setupClientNetworkHandlers() {
     const client = state.clientNetwork;
+    if (!client) return;
 
-    if (!client) {
-        return;
-    }
+    client.on("signalingConnected", () => {
+        lobbyUI.setClientStatus(
+            `Сигнализация подключена. Ожидаю HOST комнаты ${state.roomCode}...`
+        );
+    });
 
     client.on("connected", () => {
         lobbyUI.setClientStatus(
@@ -452,19 +486,16 @@ function setupClientNetworkHandlers() {
     client.on(MESSAGE.WELCOME, message => {
         state.playerId = message.playerId;
         state.roomCode = message.roomCode;
-        state.currentSnapshot = message.snapshot;
 
         elements.gameRoomCode.textContent = message.roomCode;
         elements.gamePlayerId.textContent = message.playerId;
 
         gameUI.setPlayerId(message.playerId);
         gameUI.render(message.snapshot);
-
         lobbyUI.showGame();
     });
 
     client.on(MESSAGE.SNAPSHOT, message => {
-        state.currentSnapshot = message.snapshot;
         gameUI.render(message.snapshot);
     });
 
@@ -480,12 +511,17 @@ function setupClientNetworkHandlers() {
         lobbyUI.setClientStatus(
             `Ошибка сервера: ${message.message ?? "unknown"}`
         );
+        elements.createAnswerButton.disabled = false;
     });
 
     client.on("disconnected", () => {
-        lobbyUI.setClientStatus(
-            "Соединение с HOST потеряно."
-        );
+        lobbyUI.setClientStatus("Соединение с HOST потеряно.");
+    });
+
+    client.on("signalingDisconnected", () => {
+        if (state.mode === "client") {
+            lobbyUI.setClientStatus("Сигнализация отключена.");
+        }
     });
 
     client.on("connectionStateChange", value => {
@@ -494,6 +530,7 @@ function setupClientNetworkHandlers() {
 
     client.on("error", error => {
         console.error("Client network error:", error);
+        elements.createAnswerButton.disabled = false;
     });
 }
 
@@ -520,22 +557,18 @@ function handleKeyboard(event) {
         case "arrowup":
             dy = -1;
             break;
-
         case "s":
         case "arrowdown":
             dy = 1;
             break;
-
         case "a":
         case "arrowleft":
             dx = -1;
             break;
-
         case "d":
         case "arrowright":
             dx = 1;
             break;
-
         default:
             return;
     }
@@ -543,12 +576,7 @@ function handleKeyboard(event) {
     event.preventDefault();
 
     if (state.mode === "host" && state.gameServer) {
-        state.gameServer.hostInput({
-            action: "move",
-            dx,
-            dy
-        });
-
+        state.gameServer.hostInput({ action: "move", dx, dy });
         return;
     }
 
@@ -559,30 +587,44 @@ function handleKeyboard(event) {
 
 
 /* ============================================================
-   INVITES
+   DATA / ROOM HELPERS
    ============================================================ */
 
-function handleHashChange() {
-    const invite = getInviteFromHash();
+function createRoomCode() {
+    const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+    const bytes = new Uint8Array(6);
+    crypto.getRandomValues(bytes);
 
-    if (invite && state.mode === "menu") {
-        prepareClientFromInvite(invite);
-    }
+    return [...bytes]
+        .map(byte => alphabet[byte % alphabet.length])
+        .join("");
+}
+
+
+function sanitizeRoomCode(value) {
+    return String(value ?? "")
+        .trim()
+        .toUpperCase()
+        .replace(/[^A-Z0-9]/g, "")
+        .slice(0, 12);
+}
+
+
+function getRoomCodeFromHash() {
+    const hash = location.hash.substring(1);
+    const params = new URLSearchParams(hash);
+    return sanitizeRoomCode(params.get("room"));
 }
 
 
 function getInviteFromHash() {
-    if (!location.hash) {
-        return null;
-    }
+    if (!location.hash) return null;
 
     const hash = location.hash.substring(1);
     const params = new URLSearchParams(hash);
     const inviteData = params.get("invite");
 
-    if (!inviteData) {
-        return null;
-    }
+    if (!inviteData) return null;
 
     try {
         return decodeData(inviteData);
@@ -622,33 +664,21 @@ function createAnswerLink(data) {
 
 function decodeDataFromText(text) {
     const value = text.trim();
+    if (!value) throw new Error("Пустые данные.");
 
-    if (!value) {
-        throw new Error("Пустые данные.");
-    }
-
-    if (
-        value.startsWith("http://") ||
-        value.startsWith("https://")
-    ) {
+    if (value.includes("#answer=")) {
         const url = new URL(value);
-        const hash = url.hash.replace(/^#/, "");
-        const params = new URLSearchParams(hash);
-        const encoded = params.get("answer");
-
-        if (!encoded) {
-            throw new Error("Answer-ссылка пуста или некорректна.");
-        }
-
-        return decodeData(encoded);
+        const encoded = url.hash.substring(1);
+        const params = new URLSearchParams(encoded);
+        return decodeData(params.get("answer"));
     }
 
     return decodeData(value);
 }
 
 
-function encodeData(data) {
-    const json = JSON.stringify(data);
+function encodeData(value) {
+    const json = JSON.stringify(value);
     const bytes = new TextEncoder().encode(json);
     let binary = "";
 
@@ -659,77 +689,50 @@ function encodeData(data) {
     return btoa(binary)
         .replace(/\+/g, "-")
         .replace(/\//g, "_")
-        .replace(/=/g, "");
+        .replace(/=+$/g, "");
 }
 
 
-function decodeData(data) {
-    let normalized = String(data)
+function decodeData(value) {
+    if (!value) {
+        throw new Error("Нет данных.");
+    }
+
+    const base64 = value
         .replace(/-/g, "+")
         .replace(/_/g, "/");
 
-    while (normalized.length % 4 !== 0) {
-        normalized += "=";
-    }
-
-    const binary = atob(normalized);
-    const bytes = new Uint8Array(binary.length);
-
-    for (let i = 0; i < binary.length; i++) {
-        bytes[i] = binary.charCodeAt(i);
-    }
+    const padded = base64 + "=".repeat((4 - base64.length % 4) % 4);
+    const binary = atob(padded);
+    const bytes = Uint8Array.from(binary, char => char.charCodeAt(0));
 
     return JSON.parse(new TextDecoder().decode(bytes));
 }
 
 
-/* ============================================================
-   PLAYER NAME
-   ============================================================ */
-
-function sanitizeName(name) {
-    const value = String(name ?? "")
-        .trim()
-        .replace(/\s+/g, " ")
-        .slice(0, 24);
-
-    return value || "Player";
+function loadPlayerName() {
+    try {
+        return sanitizeName(localStorage.getItem("site-game-player-name"));
+    }
+    catch {
+        return "Player";
+    }
 }
 
 
 function savePlayerName(name) {
-    localStorage.setItem(
-        "browser-game-player-name",
-        sanitizeName(name)
-    );
-}
-
-
-function loadPlayerName() {
-    return sanitizeName(
-        localStorage.getItem(
-            "browser-game-player-name"
-        ) || "Player"
-    );
-}
-
-
-/* ============================================================
-   ROOM CODE
-   ============================================================ */
-
-function createRoomCode() {
-    const chars =
-        "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
-
-    const bytes = new Uint32Array(8);
-    crypto.getRandomValues(bytes);
-
-    let value = "";
-
-    for (const byte of bytes) {
-        value += chars[byte % chars.length];
+    try {
+        localStorage.setItem("site-game-player-name", name);
     }
+    catch {
+        // Storage may be unavailable in private/restricted contexts.
+    }
+}
 
-    return `${value.substring(0, 4)}-${value.substring(4)}`;
+
+function sanitizeName(name) {
+    return String(name ?? "")
+        .trim()
+        .replace(/\s+/g, " ")
+        .slice(0, 24) || "Player";
 }
