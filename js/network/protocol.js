@@ -1,30 +1,79 @@
+/*
+ * Единый протокол обмена сообщениями
+ * между GameServer и подключёнными игроками.
+ *
+ * Все игровые сообщения передаются
+ * как JSON-строки через WebRTC DataChannel.
+ */
+
 export const MESSAGE = Object.freeze({
+    /*
+     * Client -> Server
+     */
     JOIN: "join",
-    WELCOME: "welcome",
-
     INPUT: "input",
+    PING: "ping",
 
+    /*
+     * Server -> Client
+     */
+    WELCOME: "welcome",
     SNAPSHOT: "snapshot",
-
     PLAYER_JOINED: "player_joined",
     PLAYER_LEFT: "player_left",
-
-    PING: "ping",
-    PONG: "pong",
-
-    ERROR: "error"
+    ERROR: "error",
+    PONG: "pong"
 });
 
 
-export function makeMessage(type, data = {}) {
+/**
+ * Создаёт сообщение протокола.
+ *
+ * Например:
+ *
+ * makeMessage(
+ *     MESSAGE.INPUT,
+ *     {
+ *         action: "move",
+ *         dx: 1,
+ *         dy: 0
+ *     }
+ * )
+ *
+ * Вернёт JSON-строку:
+ *
+ * {
+ *     "type": "input",
+ *     "action": "move",
+ *     "dx": 1,
+ *     "dy": 0
+ * }
+ */
+export function makeMessage(
+    type,
+    data = {}
+) {
     if (
-        typeof type !== "string" ||
-        type.length === 0
+        typeof type !==
+        "string"
     ) {
-        throw new Error(
-            "Message type must be a non-empty string."
+        throw new TypeError(
+            "Message type must be a string."
         );
     }
+
+
+    if (
+        !data ||
+        typeof data !==
+            "object" ||
+        Array.isArray(data)
+    ) {
+        throw new TypeError(
+            "Message data must be an object."
+        );
+    }
+
 
     return JSON.stringify({
         type,
@@ -33,24 +82,44 @@ export function makeMessage(type, data = {}) {
 }
 
 
-export function parseMessage(raw) {
+/**
+ * Безопасно разбирает входящее сообщение.
+ *
+ * Возвращает:
+ *
+ * {
+ *     type: "...",
+ *     ...
+ * }
+ *
+ * либо null, если сообщение
+ * некорректное.
+ */
+export function parseMessage(
+    raw
+) {
     if (
-        typeof raw !== "string" ||
-        raw.length === 0
+        typeof raw !==
+        "string"
     ) {
         return null;
     }
+
 
     try {
         const message =
             JSON.parse(raw);
 
+
         if (
             !message ||
-            typeof message !== "object"
+            typeof message !==
+                "object" ||
+            Array.isArray(message)
         ) {
             return null;
         }
+
 
         if (
             typeof message.type !==
@@ -59,14 +128,23 @@ export function parseMessage(raw) {
             return null;
         }
 
+
         return message;
     }
-    catch (error) {
-        console.warn(
-            "Failed to parse network message:",
-            error
-        );
-
+    catch {
         return null;
     }
+}
+
+
+/**
+ * Проверяет, является ли сообщение
+ * допустимым типом протокола.
+ */
+export function isMessageType(
+    type
+) {
+    return Object.values(
+        MESSAGE
+    ).includes(type);
 }
