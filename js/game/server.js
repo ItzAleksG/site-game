@@ -86,8 +86,8 @@ export class GameServer {
         return;
     }
 
-    this.broadcast(
 
+    const chatMessage =
         makeMessage(
             MESSAGE.CHAT,
             {
@@ -95,26 +95,26 @@ export class GameServer {
                 name: player.name,
                 text
             }
-        )
+        );
 
-    );
 
     /*
-     * HOST сам не получает сообщение через
-     * WebRTC, поэтому вызываем callback
-     * локально.
+     * Отправляем сообщение P1, P2, P3...
+     */
+
+    this.broadcast(chatMessage);
+
+
+    /*
+     * И показываем его самому HOST.
      */
 
     if (this.onChat) {
 
         this.onChat({
-
             playerId: "HOST",
-
             name: player.name,
-
             text
-
         });
 
     }
@@ -396,74 +396,66 @@ export class GameServer {
     ========================================================
     */
 
-    chat(
-        connection,
-        message
-    ) {
+    chat(connection, message) {
 
-        const playerId =
-            connection.playerId;
+    const playerId = connection.playerId;
 
-        if (!playerId) {
-            return;
-        }
+    if (!playerId) {
+        return;
+    }
 
+    const player =
+        this.world.getPlayer(playerId);
 
-        const player =
-            this.world.getPlayer(
-                playerId
-            );
+    if (!player) {
+        return;
+    }
 
-        if (!player) {
-            return;
-        }
-
-
-        const text =
-            String(
-                message.text || ""
-            )
+    const text =
+        String(message.text || "")
             .trim()
             .slice(0, 500);
 
+    if (!text) {
+        return;
+    }
 
-        if (!text) {
-            return;
-        }
-
-
-        this.broadcast(
-
-            makeMessage(
-                MESSAGE.CHAT,
-                {
-
-                    playerId,
-
-                    name:
-                        player.name,
-
-                    text
-
-                }
-
-            )
-
+    const chatMessage =
+        makeMessage(
+            MESSAGE.CHAT,
+            {
+                playerId,
+                name: player.name,
+                text
+            }
         );
 
 
-        /*
-         * Хост должен тоже увидеть
-         * собственное сообщение.
-         */
+    /*
+     * Отправляем всем подключённым игрокам.
+     */
 
-        if (this.onSnapshot) {
-            this.onSnapshot(
-                this.world.snapshot()
-            );
-        }
+    this.broadcast(chatMessage);
+
+
+    /*
+     * И отдельно уведомляем браузер хоста.
+     *
+     * HOST не находится в this.connections,
+     * поэтому broadcast() до него не доберётся.
+     */
+
+    if (this.onChat) {
+
+        this.onChat({
+            playerId,
+            name: player.name,
+            text
+        });
 
     }
+
+}
 
 
     /*
