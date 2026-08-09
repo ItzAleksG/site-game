@@ -10,48 +10,85 @@ import {
 
 export class GameServer {
 
-    constructor() {
+    constructor(roomCode) {
 
-        this.world =
-            new World();
+        this.roomCode = roomCode;
 
-
-        /*
-         * playerId -> connection
-         */
+        this.world = new World();
 
         this.connections = {};
 
-
-        /*
-         * Последовательный ID.
-         */
-
         this.nextPlayerNumber = 1;
 
+        this.onPlayerListChanged = null;
 
-        this.onPlayerListChanged =
-            null;
+        this.onSnapshot = null;
 
+        /*
+         * Хост — полноценный игрок.
+         */
 
-        this.onChat =
-            null;
+        this.world.addPlayer(
+            "HOST",
+            "Host"
+        );
 
     }
 
 
-    addConnection(
-        connection
-    ) {
+    /*
+    ========================================================
+    HOST
+    ========================================================
+    */
 
-        /*
-         * Пока connection не знает,
-         * какой игрок за ней находится.
-         */
+    setHostName(name) {
 
-        connection.playerId =
-            null;
+        const host =
+            this.world.getPlayer("HOST");
 
+        if (host) {
+            host.name = sanitizeName(name);
+        }
+
+    }
+
+
+    hostInput(message) {
+
+        this.input(
+            {
+                playerId: "HOST"
+            },
+            message
+        );
+
+    }
+
+
+    hostChat(text) {
+
+        this.chat(
+            {
+                playerId: "HOST"
+            },
+            {
+                text
+            }
+        );
+
+    }
+
+
+    /*
+    ========================================================
+    CONNECTION
+    ========================================================
+    */
+
+    addConnection(connection) {
+
+        connection.playerId = null;
 
         connection.channel.onmessage =
             event => {
@@ -82,19 +119,14 @@ export class GameServer {
     ) {
 
         const message =
-            this.parse(
-                raw
-            );
-
+            this.parse(raw);
 
         if (!message) {
             return;
         }
 
 
-        switch (
-            message.type
-        ) {
+        switch (message.type) {
 
             case MESSAGE.JOIN:
 
@@ -130,13 +162,14 @@ export class GameServer {
 
                 this.send(
                     connection,
+
                     makeMessage(
                         MESSAGE.PONG,
                         {
-                            time:
-                                Date.now()
+                            time: Date.now()
                         }
                     )
+
                 );
 
                 break;
@@ -153,17 +186,14 @@ export class GameServer {
             const message =
                 JSON.parse(raw);
 
-
             if (
                 !message ||
-                typeof message.type !==
-                "string"
+                typeof message.type !== "string"
             ) {
 
                 return null;
 
             }
-
 
             return message;
 
@@ -177,30 +207,25 @@ export class GameServer {
     }
 
 
+    /*
+    ========================================================
+    JOIN
+    ========================================================
+    */
+
     join(
         connection,
         message
     ) {
 
-        /*
-         * Один connection может
-         * зарегистрироваться только один раз.
-         */
-
-        if (
-            connection.playerId
-        ) {
-
+        if (connection.playerId) {
             return;
-
         }
 
 
         const playerId =
             "P-" +
-            String(
-                this.nextPlayerNumber++
-            );
+            this.nextPlayerNumber++;
 
 
         const name =
@@ -213,9 +238,8 @@ export class GameServer {
             playerId;
 
 
-        this.connections[
-            playerId
-        ] = connection;
+        this.connections[playerId] =
+            connection;
 
 
         this.world.addPlayer(
@@ -225,7 +249,8 @@ export class GameServer {
 
 
         /*
-         * Первое сообщение игроку.
+         * Сначала отправляем новому игроку
+         * полное состояние комнаты.
          */
 
         this.send(
@@ -235,36 +260,42 @@ export class GameServer {
                 MESSAGE.WELCOME,
                 {
 
+                    roomCode:
+                        this.roomCode,
+
                     playerId,
 
                     snapshot:
                         this.world.snapshot()
 
                 }
+
             )
 
         );
 
 
         /*
-         * Сообщаем остальным.
+         * Затем сообщаем остальным.
          */
 
         this.broadcast(
+
             makeMessage(
                 MESSAGE.PLAYER_JOINED,
                 {
 
                     player:
-                        this.world
-                            .getPlayer(
-                                playerId
-                            )
+                        this.world.getPlayer(
+                            playerId
+                        )
 
                 }
+
             ),
 
             playerId
+
         );
 
 
@@ -275,6 +306,12 @@ export class GameServer {
     }
 
 
+    /*
+    ========================================================
+    INPUT
+    ========================================================
+    */
+
     input(
         connection,
         message
@@ -283,19 +320,10 @@ export class GameServer {
         const playerId =
             connection.playerId;
 
-
         if (!playerId) {
             return;
         }
 
-
-        /*
-         * Клиент говорит только:
-         *
-         * "я хочу двигаться вправо".
-         *
-         * Клиент НЕ присылает координаты.
-         */
 
         if (
             message.action ===
@@ -320,6 +348,12 @@ export class GameServer {
     }
 
 
+    /*
+    ========================================================
+    CHAT
+    ========================================================
+    */
+
     chat(
         connection,
         message
@@ -327,7 +361,6 @@ export class GameServer {
 
         const playerId =
             connection.playerId;
-
 
         if (!playerId) {
             return;
@@ -339,7 +372,6 @@ export class GameServer {
                 playerId
             );
 
-
         if (!player) {
             return;
         }
@@ -350,10 +382,7 @@ export class GameServer {
                 message.text || ""
             )
             .trim()
-            .slice(
-                0,
-                500
-            );
+            .slice(0, 500);
 
 
         if (!text) {
@@ -361,7 +390,8 @@ export class GameServer {
         }
 
 
-        const packet =
+        this.broadcast(
+
             makeMessage(
                 MESSAGE.CHAT,
                 {
@@ -374,33 +404,36 @@ export class GameServer {
                     text
 
                 }
-            );
 
+            )
 
-        this.broadcast(
-            packet
         );
 
 
-        if (this.onChat) {
+        /*
+         * Хост должен тоже увидеть
+         * собственное сообщение.
+         */
 
-            this.onChat(
-                player,
-                text
+        if (this.onSnapshot) {
+            this.onSnapshot(
+                this.world.snapshot()
             );
-
         }
 
     }
 
 
-    disconnect(
-        connection
-    ) {
+    /*
+    ========================================================
+    DISCONNECT
+    ========================================================
+    */
+
+    disconnect(connection) {
 
         const playerId =
             connection.playerId;
-
 
         if (!playerId) {
             return;
@@ -418,14 +451,14 @@ export class GameServer {
 
 
         this.broadcast(
+
             makeMessage(
                 MESSAGE.PLAYER_LEFT,
                 {
-
                     playerId
-
                 }
             )
+
         );
 
 
@@ -435,6 +468,12 @@ export class GameServer {
 
     }
 
+
+    /*
+    ========================================================
+    SNAPSHOT
+    ========================================================
+    */
 
     broadcastSnapshot() {
 
@@ -447,14 +486,32 @@ export class GameServer {
             makeMessage(
                 MESSAGE.SNAPSHOT,
                 {
+                    roomCode:
+                        this.roomCode,
+
                     snapshot
                 }
             )
 
         );
 
+
+        if (this.onSnapshot) {
+
+            this.onSnapshot(
+                snapshot
+            );
+
+        }
+
     }
 
+
+    /*
+    ========================================================
+    BROADCAST
+    ========================================================
+    */
 
     broadcast(
         message,
@@ -470,9 +527,7 @@ export class GameServer {
                 playerId ===
                 exceptPlayerId
             ) {
-
                 continue;
-
             }
 
 
@@ -500,9 +555,7 @@ export class GameServer {
         if (
             !connection.channel
         ) {
-
             return;
-
         }
 
 
@@ -510,9 +563,7 @@ export class GameServer {
             connection.channel.readyState !==
             "open"
         ) {
-
             return;
-
         }
 
 
@@ -544,28 +595,16 @@ export class GameServer {
 }
 
 
-function sanitizeName(
-    name
-) {
+function sanitizeName(name) {
 
     name =
         String(
             name || ""
         )
         .trim()
-        .slice(
-            0,
-            24
-        );
+        .slice(0, 24);
 
 
-    if (!name) {
-
-        return "Player";
-
-    }
-
-
-    return name;
+    return name || "Player";
 
 }
