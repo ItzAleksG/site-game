@@ -14,6 +14,16 @@ import {
     GameServer
 } from "./game/server.js";
 
+gameServer.onChat =
+    message => {
+
+        addChatMessage(
+            message.name,
+            message.text
+        );
+
+    };
+
 import {
     showHostLobby,
     showClientLobby,
