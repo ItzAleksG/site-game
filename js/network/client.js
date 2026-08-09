@@ -165,32 +165,30 @@ export class ClientNetwork {
     }
 
 
-    handleMessage(
-        raw
-    ) {
+    handleMessage(raw) {
 
-        let message;
+    let message;
 
 
-        try {
+    try {
 
-            message =
-                JSON.parse(raw);
-
-        }
-        catch {
-
-            return;
-
-        }
-
-
-        this.emit(
-            message.type,
-            message
-        );
+        message =
+            JSON.parse(raw);
 
     }
+    catch {
+
+        return;
+
+    }
+
+
+    this.emit(
+        message.type,
+        message
+    );
+
+}
 
 
     send(
