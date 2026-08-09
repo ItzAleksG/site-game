@@ -1,333 +1,674 @@
 import {
     MESSAGE,
-    makeMessage
+    makeMessage,
+    parseMessage
 } from "./protocol.js";
 
 
-const RTC_CONFIG = {
-
-    iceServers: [
-
-        {
-            urls:
-                "stun:stun.l.google.com:19302"
-        }
-
-    ]
-
-};
-
-
 export class ClientNetwork {
+    constructor({
+        iceServers = []
+    } = {}) {
+        this.iceServers =
+            iceServers;
 
-    constructor() {
+        this.pc = null;
 
-        this.pc =
-            null;
+        this.channel = null;
 
+        this.playerId = null;
 
-        this.channel =
-            null;
+        this.roomCode = null;
 
+        this.handlers = new Map();
 
-        this.playerId =
-            null;
+        this.connected = false;
 
+        this.remoteDescriptionSet =
+            false;
 
-        this.handlers = {};
+        this.pendingCandidates = [];
 
+        this.disconnectNotified =
+            false;
     }
 
 
-    on(
-        type,
-        callback
-    ) {
+    /*
+    ============================================================
+    EVENT SYSTEM
+    ============================================================
+    */
 
-        this.handlers[
-            type
-        ] = callback;
-
-    }
-
-
-    emit(
-        type,
-        data
-    ) {
-
-        const handler =
-            this.handlers[
-                type
-            ];
-
-
-        if (handler) {
-
-            handler(data);
-
+    on(event, handler) {
+        if (
+            typeof handler !==
+            "function"
+        ) {
+            throw new Error(
+                "Handler must be a function."
+            );
         }
 
+        if (
+            !this.handlers.has(event)
+        ) {
+            this.handlers.set(
+                event,
+                new Set()
+            );
+        }
+
+        this.handlers
+            .get(event)
+            .add(handler);
+
+
+        return () => {
+            this.off(
+                event,
+                handler
+            );
+        };
     }
 
 
-    async connect(
-        offer
-    ) {
+    off(event, handler) {
+        const handlers =
+            this.handlers.get(event);
+
+        if (!handlers) {
+            return;
+        }
+
+        handlers.delete(handler);
+
+        if (
+            handlers.size === 0
+        ) {
+            this.handlers.delete(
+                event
+            );
+        }
+    }
+
+
+    emit(event, data) {
+        const handlers =
+            this.handlers.get(event);
+
+        if (!handlers) {
+            return;
+        }
+
+        for (
+            const handler
+            of handlers
+        ) {
+            try {
+                handler(data);
+            }
+            catch (error) {
+                console.error(
+                    `Error in "${event}" handler:`,
+                    error
+                );
+            }
+        }
+    }
+
+
+    /*
+    ============================================================
+    CONNECT
+    ============================================================
+    */
+
+    async connect(offer) {
+        this.close();
+
+        this.disconnectNotified =
+            false;
+
+        this.remoteDescriptionSet =
+            false;
+
+        this.pendingCandidates = [];
 
         this.pc =
-            new RTCPeerConnection(
-                RTC_CONFIG
-            );
+            new RTCPeerConnection({
+                iceServers:
+                    this.iceServers
+            });
 
 
-        this.pc.ondatachannel =
-            event => {
-
-                this.channel =
-                    event.channel;
+        this.setupPeerConnection();
 
 
-                this.setupChannel();
+        await this.pc.setRemoteDescription(
+            new RTCSessionDescription(
+                offer
+            )
+        );
 
-            };
+
+        this.remoteDescriptionSet =
+            true;
 
 
-        await this.pc
-            .setRemoteDescription(
-
-                new RTCSessionDescription(
-                    offer
-                )
-
-            );
+        await this.flushPendingCandidates();
 
 
         const answer =
             await this.pc.createAnswer();
 
 
-        await this.pc
-            .setLocalDescription(
-                answer
-            );
-
-
-        await waitForIceGatheringComplete(
-            this.pc
+        await this.pc.setLocalDescription(
+            answer
         );
 
 
-        return {
+        await this.waitForIceGathering();
 
+
+        return {
             type:
                 this.pc.localDescription.type,
 
             sdp:
                 this.pc.localDescription.sdp
-
         };
-
     }
 
 
-    setupChannel() {
+    /*
+    ============================================================
+    PEER CONNECTION
+    ============================================================
+    */
 
-        this.channel.onopen =
+    setupPeerConnection() {
+        this.pc.ondatachannel =
+            event => {
+
+                const channel =
+                    event.channel;
+
+                this.setupDataChannel(
+                    channel
+                );
+            };
+
+
+        this.pc.onicecandidate =
+            event => {
+
+                if (
+                    event.candidate
+                ) {
+                    this.emit(
+                        "iceCandidate",
+                        event.candidate
+                    );
+                }
+            };
+
+
+        this.pc.onconnectionstatechange =
             () => {
+
+                this.handleConnectionState();
+            };
+
+
+        this.pc.oniceconnectionstatechange =
+            () => {
+
+                this.emit(
+                    "iceConnectionStateChange",
+                    this.pc.iceConnectionState
+                );
+            };
+    }
+
+
+    /*
+    ============================================================
+    DATA CHANNEL
+    ============================================================
+    */
+
+    setupDataChannel(channel) {
+        this.channel =
+            channel;
+
+
+        channel.binaryType =
+            "arraybuffer";
+
+
+        channel.onopen =
+            () => {
+
+                this.connected =
+                    true;
+
+                this.disconnectNotified =
+                    false;
 
                 this.emit(
                     "connected"
                 );
-
             };
 
 
-        this.channel.onmessage =
+        channel.onmessage =
             event => {
 
                 this.handleMessage(
                     event.data
                 );
-
             };
 
 
-        this.channel.onclose =
+        channel.onclose =
             () => {
 
-                this.emit(
-                    "disconnected"
-                );
-
+                this.handleDisconnect();
             };
 
+
+        channel.onerror =
+            error => {
+
+                console.error(
+                    "Data channel error:",
+                    error
+                );
+
+                this.emit(
+                    "error",
+                    error
+                );
+            };
     }
 
+
+    /*
+    ============================================================
+    MESSAGES
+    ============================================================
+    */
 
     handleMessage(raw) {
+        const message =
+            parseMessage(raw);
 
-    let message;
-
-
-    try {
-
-        message =
-            JSON.parse(raw);
-
-    }
-    catch {
-
-        return;
-
-    }
-
-
-    this.emit(
-        message.type,
-        message
-    );
-
-}
-
-
-    send(
-        message
-    ) {
-
-        if (
-            !this.channel ||
-            this.channel.readyState !==
-            "open"
-        ) {
-
-            return false;
-
+        if (!message) {
+            return;
         }
 
 
-        this.channel.send(
-            makeMessage(
-                message.type,
-                message.data || {}
-            )
+        if (
+            message.type ===
+            MESSAGE.WELCOME
+        ) {
+            this.playerId =
+                message.playerId;
+
+            this.roomCode =
+                message.roomCode;
+        }
+
+
+        this.emit(
+            message.type,
+            message
         );
 
 
-        return true;
-
+        this.emit(
+            "message",
+            message
+        );
     }
 
+
+    /*
+    ============================================================
+    JOIN
+    ============================================================
+    */
 
     join(name) {
+        this.send(
+            makeMessage(
+                MESSAGE.JOIN,
+                {
+                    name
+                }
+            )
+        );
+    }
 
-    this.send({
 
-        type:
-            MESSAGE.JOIN,
+    /*
+    ============================================================
+    INPUT
+    ============================================================
+    */
 
-        data: {
+    move(dx, dy) {
+        this.send(
+            makeMessage(
+                MESSAGE.INPUT,
+                {
+                    action:
+                        "move",
 
-            name
+                    dx,
 
+                    dy
+                }
+            )
+        );
+    }
+
+
+    sendInput(input) {
+        this.send(
+            makeMessage(
+                MESSAGE.INPUT,
+                input
+            )
+        );
+    }
+
+
+    /*
+    ============================================================
+    SEND
+    ============================================================
+    */
+
+    send(message) {
+        if (
+            !this.channel ||
+            this.channel.readyState !==
+                "open"
+        ) {
+            return false;
         }
 
-    });
 
-}
+        try {
+            this.channel.send(
+                message
+            );
 
+            return true;
+        }
+        catch (error) {
+            console.error(
+                "Failed to send message:",
+                error
+            );
 
-    move(
-        dx,
-        dy
-    ) {
-
-        this.send({
-
-            type:
-                MESSAGE.INPUT,
-
-            data: {
-
-                action:
-                    "move",
-
-                dx,
-
-                dy
-
-            }
-
-        });
-
+            return false;
+        }
     }
 
 
-    chat(
-        text
-    ) {
+    /*
+    ============================================================
+    CONNECTION STATE
+    ============================================================
+    */
 
-        this.send({
+    handleConnectionState() {
+        if (!this.pc) {
+            return;
+        }
 
-            type:
-                MESSAGE.CHAT,
 
-            data: {
+        const state =
+            this.pc.connectionState;
 
-                text
 
-            }
+        this.emit(
+            "connectionStateChange",
+            state
+        );
 
-        });
 
+        if (
+            state === "connected"
+        ) {
+            return;
+        }
+
+
+        if (
+            state === "failed" ||
+            state === "disconnected" ||
+            state === "closed"
+        ) {
+            this.handleDisconnect();
+        }
     }
 
-}
+
+    handleDisconnect() {
+        if (
+            this.disconnectNotified
+        ) {
+            return;
+        }
 
 
-function waitForIceGatheringComplete(
-    pc
-) {
+        this.disconnectNotified =
+            true;
 
-    if (
-        pc.iceGatheringState ===
-        "complete"
-    ) {
+        this.connected =
+            false;
 
-        return Promise.resolve();
 
+        this.emit(
+            "disconnected"
+        );
     }
 
 
-    return new Promise(
-        resolve => {
+    /*
+    ============================================================
+    ICE
+    ============================================================
+    */
 
-            function check() {
+    async waitForIceGathering(
+        timeout = 5000
+    ) {
+        if (!this.pc) {
+            return;
+        }
 
-                if (
-                    pc.iceGatheringState ===
-                    "complete"
-                ) {
 
-                    pc.removeEventListener(
+        if (
+            this.pc.iceGatheringState ===
+            "complete"
+        ) {
+            return;
+        }
+
+
+        await new Promise(
+            resolve => {
+
+                let finished =
+                    false;
+
+
+                const finish = () => {
+
+                    if (finished) {
+                        return;
+                    }
+
+                    finished =
+                        true;
+
+                    clearTimeout(
+                        timer
+                    );
+
+                    this.pc.removeEventListener(
                         "icegatheringstatechange",
                         check
                     );
 
-
                     resolve();
+                };
 
-                }
 
+                const check = () => {
+
+                    if (
+                        this.pc
+                            .iceGatheringState ===
+                        "complete"
+                    ) {
+                        finish();
+                    }
+                };
+
+
+                const timer =
+                    setTimeout(
+                        finish,
+                        timeout
+                    );
+
+
+                this.pc.addEventListener(
+                    "icegatheringstatechange",
+                    check
+                );
+
+
+                check();
             }
+        );
+    }
 
 
-            pc.addEventListener(
-                "icegatheringstatechange",
-                check
+    async addIceCandidate(
+        candidate
+    ) {
+        if (!this.pc) {
+            return;
+        }
+
+
+        if (
+            !this.remoteDescriptionSet
+        ) {
+            this.pendingCandidates.push(
+                candidate
             );
 
+            return;
         }
-    );
 
+
+        try {
+            await this.pc.addIceCandidate(
+                candidate
+            );
+        }
+        catch (error) {
+            console.error(
+                "Failed to add ICE candidate:",
+                error
+            );
+        }
+    }
+
+
+    async flushPendingCandidates() {
+        if (
+            !this.pc ||
+            !this.remoteDescriptionSet
+        ) {
+            return;
+        }
+
+
+        const candidates =
+            this.pendingCandidates;
+
+
+        this.pendingCandidates =
+            [];
+
+
+        for (
+            const candidate
+            of candidates
+        ) {
+            await this.addIceCandidate(
+                candidate
+            );
+        }
+    }
+
+
+    /*
+    ============================================================
+    CLOSE
+    ============================================================
+    */
+
+    close() {
+        this.connected =
+            false;
+
+        this.playerId =
+            null;
+
+        this.roomCode =
+            null;
+
+        this.remoteDescriptionSet =
+            false;
+
+        this.pendingCandidates =
+            [];
+
+
+        if (this.channel) {
+            try {
+                this.channel.close();
+            }
+            catch {
+                // Already closed.
+            }
+        }
+
+
+        if (this.pc) {
+            try {
+                this.pc.close();
+            }
+            catch {
+                // Already closed.
+            }
+        }
+
+
+        this.channel =
+            null;
+
+        this.pc =
+            null;
+    }
 }
