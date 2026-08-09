@@ -1,72 +1,354 @@
-const RTC_CONFIG = {
-
-    iceServers: [
-
-        {
-            urls:
-                "stun:stun.l.google.com:19302"
-        }
-
-    ]
-
-};
+import {
+    MESSAGE,
+    makeMessage,
+    parseMessage
+} from "./protocol.js";
 
 
 export class HostNetwork {
+    constructor(
+        gameServer,
+        {
+            iceServers = []
+        } = {}
+    ) {
+        if (!gameServer) {
+            throw new Error(
+                "HostNetwork requires a GameServer."
+            );
+        }
 
-    constructor(gameServer) {
 
         this.gameServer =
             gameServer;
 
+        this.iceServers =
+            iceServers;
 
+
+        /*
+         * Все WebRTC-соединения HOST.
+         */
         this.connections =
-            new Set();
+            new Map();
 
+
+        /*
+         * Каждое соединение получает
+         * уникальный внутренний ID.
+         */
+        this.nextConnectionId =
+            1;
+
+
+        /*
+         * Callbacks.
+         */
+        this.handlers =
+            new Map();
     }
 
 
-    async createInvite() {
+    /*
+    ============================================================
+    EVENT SYSTEM
+    ============================================================
+    */
 
-        const pc =
-            new RTCPeerConnection(
-                RTC_CONFIG
+    on(event, handler) {
+        if (
+            typeof handler !==
+            "function"
+        ) {
+            throw new Error(
+                "Handler must be a function."
             );
+        }
+
+
+        if (
+            !this.handlers.has(event)
+        ) {
+            this.handlers.set(
+                event,
+                new Set()
+            );
+        }
+
+
+        this.handlers
+            .get(event)
+            .add(handler);
+
+
+        return () => {
+            this.off(
+                event,
+                handler
+            );
+        };
+    }
+
+
+    off(event, handler) {
+        const handlers =
+            this.handlers.get(event);
+
+
+        if (!handlers) {
+            return;
+        }
+
+
+        handlers.delete(
+            handler
+        );
+
+
+        if (
+            handlers.size === 0
+        ) {
+            this.handlers.delete(
+                event
+            );
+        }
+    }
+
+
+    emit(event, data) {
+        const handlers =
+            this.handlers.get(event);
+
+
+        if (!handlers) {
+            return;
+        }
+
+
+        for (
+            const handler
+            of handlers
+        ) {
+            try {
+                handler(data);
+            }
+            catch (error) {
+                console.error(
+                    `Error in "${event}" handler:`,
+                    error
+                );
+            }
+        }
+    }
+
+
+    /*
+    ============================================================
+    CREATE INVITE
+    ============================================================
+    */
+
+    async createInvite() {
+        /*
+         * Для каждого нового игрока
+         * создаём отдельный RTCPeerConnection.
+         */
+        const connection =
+            this.createConnection();
 
 
         const channel =
-            pc.createDataChannel(
+            connection.pc.createDataChannel(
                 "game"
             );
 
 
-        const connection = {
-
-            pc,
-
-            channel,
-
-            playerId: null,
-
-            state: "waiting"
-
-        };
+        connection.channel =
+            channel;
 
 
-        this.connections.add(
+        this.setupDataChannel(
             connection
         );
 
 
-        /*
-         * Передаём connection
-         * игровому серверу.
-         */
+        const offer =
+            await connection.pc.createOffer();
 
-        this.gameServer
-            .addConnection(
-                connection
-            );
+
+        await connection.pc.setLocalDescription(
+            offer
+        );
+
+
+        await this.waitForIceGathering(
+            connection.pc
+        );
+
+
+        connection.state =
+            "waiting-answer";
+
+
+        this.emit(
+            "inviteCreated",
+            {
+                connectionId:
+                    connection.id,
+
+                offer:
+                    connection.pc
+                        .localDescription
+            }
+        );
+
+
+        return {
+            connectionId:
+                connection.id,
+
+            offer: {
+                type:
+                    connection.pc
+                        .localDescription
+                        .type,
+
+                sdp:
+                    connection.pc
+                        .localDescription
+                        .sdp
+            }
+        };
+    }
+
+
+    /*
+    ============================================================
+    CREATE CONNECTION
+    ============================================================
+    */
+
+    createConnection() {
+        const id =
+            `connection-${this.nextConnectionId++}`;
+
+
+        const pc =
+            new RTCPeerConnection({
+                iceServers:
+                    this.iceServers
+            });
+
+
+        const connection = {
+            id,
+
+            pc,
+
+            channel: null,
+
+            playerId: null,
+
+            state: "creating"
+        };
+
+
+        this.connections.set(
+            id,
+            connection
+        );
+
+
+        pc.onicecandidate =
+            event => {
+
+                if (
+                    event.candidate
+                ) {
+                    this.emit(
+                        "iceCandidate",
+                        {
+                            connectionId:
+                                id,
+
+                            candidate:
+                                event.candidate
+                        }
+                    );
+                }
+            };
+
+
+        pc.onconnectionstatechange =
+            () => {
+
+                this.handleConnectionState(
+                    connection
+                );
+            };
+
+
+        pc.oniceconnectionstatechange =
+            () => {
+
+                this.emit(
+                    "iceConnectionStateChange",
+                    {
+                        connectionId:
+                            id,
+
+                        state:
+                            pc.iceConnectionState
+                    }
+                );
+            };
+
+
+        pc.ondatachannel =
+            event => {
+
+                /*
+                 * Для HOST мы сами создаём
+                 * DataChannel, поэтому обычно
+                 * этот callback не используется.
+                 */
+                if (
+                    !connection.channel
+                ) {
+                    connection.channel =
+                        event.channel;
+
+                    this.setupDataChannel(
+                        connection
+                    );
+                }
+            };
+
+
+        return connection;
+    }
+
+
+    /*
+    ============================================================
+    DATA CHANNEL
+    ============================================================
+    */
+
+    setupDataChannel(
+        connection
+    ) {
+        const channel =
+            connection.channel;
+
+
+        if (!channel) {
+            return;
+        }
+
+
+        channel.binaryType =
+            "arraybuffer";
 
 
         channel.onopen =
@@ -76,114 +358,201 @@ export class HostNetwork {
                     "connected";
 
 
-                console.log(
-                    "Player connected"
+                this.emit(
+                    "playerConnection",
+                    connection
                 );
+            };
 
+
+        channel.onmessage =
+            event => {
+
+                this.gameServer.receive(
+                    connection,
+                    event.data
+                );
             };
 
 
         channel.onclose =
             () => {
 
-                connection.state =
-                    "closed";
-
+                this.removeConnection(
+                    connection
+                );
             };
 
 
-        const offer =
-            await pc.createOffer();
+        channel.onerror =
+            error => {
 
-
-        await pc.setLocalDescription(
-            offer
-        );
-
-
-        await waitForIceGatheringComplete(
-            pc
-        );
-
-
-        return {
-
-            type:
-                pc.localDescription.type,
-
-            sdp:
-                pc.localDescription.sdp
-
-        };
-
-    }
-
-
-    async acceptAnswer(answer) {
-
-        /*
-         * Ищем последнее соединение,
-         * которому ещё не дали answer.
-         */
-
-        const pending =
-            [...this.connections]
-                .reverse()
-                .find(
-                    connection =>
-                        !connection.pc
-                            .remoteDescription
+                console.error(
+                    "Host data channel error:",
+                    error
                 );
 
 
-        if (!pending) {
+                this.emit(
+                    "error",
+                    {
+                        connection,
+                        error
+                    }
+                );
+            };
+    }
 
+
+    /*
+    ============================================================
+    ACCEPT ANSWER
+    ============================================================
+    */
+
+    async acceptAnswer(
+        answer,
+        connectionId = null
+    ) {
+        const connection =
+            connectionId
+                ? this.connections.get(
+                    connectionId
+                )
+                : this.findWaitingConnection();
+
+
+        if (!connection) {
             throw new Error(
-                "Нет ожидающего подключения. Создай новое приглашение."
+                "No waiting WebRTC connection found."
             );
-
         }
 
 
-        await pending.pc
-            .setRemoteDescription(
+        if (
+            connection.state !==
+                "waiting-answer" &&
+            connection.state !==
+                "connecting"
+        ) {
+            throw new Error(
+                "This connection is not waiting for an answer."
+            );
+        }
 
+
+        await connection.pc
+            .setRemoteDescription(
                 new RTCSessionDescription(
                     answer
                 )
-
             );
 
 
-        pending.state =
-            "answer-received";
+        connection.state =
+            "connecting";
 
+
+        this.emit(
+            "answerAccepted",
+            connection
+        );
+
+
+        return connection;
     }
 
-}
+
+    /*
+    ============================================================
+    FIND WAITING CONNECTION
+    ============================================================
+    */
+
+    findWaitingConnection() {
+        /*
+         * Ищем самое новое соединение,
+         * которое ждёт Answer.
+         */
+        const connections =
+            [...this.connections.values()]
+                .reverse();
 
 
-function waitForIceGatheringComplete(pc) {
+        return (
+            connections.find(
+                connection =>
+                    connection.state ===
+                    "waiting-answer"
+            ) || null
+        );
+    }
 
-    if (
-        pc.iceGatheringState ===
-        "complete"
+
+    /*
+    ============================================================
+    ICE
+    ============================================================
+    */
+
+    async addIceCandidate(
+        connectionId,
+        candidate
     ) {
+        const connection =
+            this.connections.get(
+                connectionId
+            );
 
-        return Promise.resolve();
 
+        if (!connection) {
+            throw new Error(
+                "Connection not found."
+            );
+        }
+
+
+        await connection.pc
+            .addIceCandidate(
+                candidate
+            );
     }
 
 
-    return new Promise(
-        resolve => {
+    async waitForIceGathering(
+        pc,
+        timeout = 5000
+    ) {
+        if (
+            pc.iceGatheringState ===
+            "complete"
+        ) {
+            return;
+        }
 
-            const check = () => {
 
-                if (
-                    pc.iceGatheringState ===
-                    "complete"
-                ) {
+        await new Promise(
+            resolve => {
+
+                let finished =
+                    false;
+
+
+                const finish = () => {
+
+                    if (finished) {
+                        return;
+                    }
+
+
+                    finished =
+                        true;
+
+
+                    clearTimeout(
+                        timer
+                    );
+
 
                     pc.removeEventListener(
                         "icegatheringstatechange",
@@ -192,18 +561,194 @@ function waitForIceGatheringComplete(pc) {
 
 
                     resolve();
-
-                }
-
-            };
+                };
 
 
-            pc.addEventListener(
-                "icegatheringstatechange",
-                check
+                const check = () => {
+
+                    if (
+                        pc.iceGatheringState ===
+                        "complete"
+                    ) {
+                        finish();
+                    }
+                };
+
+
+                const timer =
+                    setTimeout(
+                        finish,
+                        timeout
+                    );
+
+
+                pc.addEventListener(
+                    "icegatheringstatechange",
+                    check
+                );
+
+
+                check();
+            }
+        );
+    }
+
+
+    /*
+    ============================================================
+    CONNECTION STATE
+    ============================================================
+    */
+
+    handleConnectionState(
+        connection
+    ) {
+        const state =
+            connection.pc
+                .connectionState;
+
+
+        connection.state =
+            state;
+
+
+        this.emit(
+            "connectionStateChange",
+            {
+                connection,
+                state
+            }
+        );
+
+
+        if (
+            state === "failed" ||
+            state === "closed"
+        ) {
+            this.removeConnection(
+                connection
+            );
+        }
+    }
+
+
+    /*
+    ============================================================
+    REMOVE CONNECTION
+    ============================================================
+    */
+
+    removeConnection(
+        connection
+    ) {
+        if (!connection) {
+            return;
+        }
+
+
+        if (
+            !this.connections.has(
+                connection.id
+            )
+        ) {
+            return;
+        }
+
+
+        this.connections.delete(
+            connection.id
+        );
+
+
+        /*
+         * Если игрок уже успел
+         * присоединиться, сообщаем
+         * GameServer о disconnect.
+         */
+        if (connection.playerId) {
+
+            this.gameServer.disconnect(
+                connection
             );
 
         }
-    );
 
+
+        try {
+            connection.channel?.close();
+        }
+        catch {
+            // Already closed.
+        }
+
+
+        try {
+            connection.pc?.close();
+        }
+        catch {
+            // Already closed.
+        }
+
+
+        this.emit(
+            "connectionRemoved",
+            connection
+        );
+    }
+
+
+    /*
+    ============================================================
+    CONNECTION LIST
+    ============================================================
+    */
+
+    getConnections() {
+        return [
+            ...this.connections.values()
+        ];
+    }
+
+
+    getConnectedConnections() {
+        return this
+            .getConnections()
+            .filter(
+                connection =>
+                    connection.state ===
+                    "connected"
+            );
+    }
+
+
+    /*
+    ============================================================
+    CLOSE
+    ============================================================
+    */
+
+    close() {
+        for (
+            const connection
+            of this.connections.values()
+        ) {
+            try {
+                connection.channel?.close();
+            }
+            catch {
+                // Already closed.
+            }
+
+
+            try {
+                connection.pc?.close();
+            }
+            catch {
+                // Already closed.
+            }
+        }
+
+
+        this.connections.clear();
+    }
 }
