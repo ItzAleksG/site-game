@@ -16,6 +16,13 @@ export class GameServer {
 
         this.world = new World();
 
+        /*
+         * WebRTC-соединения обычных игроков.
+         *
+         * HOST сюда не входит, потому что
+         * сам GameServer работает в браузере хоста.
+         */
+
         this.connections = {};
 
         this.nextPlayerNumber = 1;
@@ -24,10 +31,9 @@ export class GameServer {
 
         this.onSnapshot = null;
 
-        this.onChat = null;
 
         /*
-         * Хост — полноценный игрок.
+         * HOST — полноценный игрок.
          */
 
         this.world.addPlayer(
@@ -50,7 +56,10 @@ export class GameServer {
             this.world.getPlayer("HOST");
 
         if (host) {
-            host.name = sanitizeName(name);
+
+            host.name =
+                sanitizeName(name);
+
         }
 
     }
@@ -68,60 +77,6 @@ export class GameServer {
     }
 
 
-    hostChat(text) {
-
-    const player =
-        this.world.getPlayer("HOST");
-
-    if (!player) {
-        return;
-    }
-
-    text =
-        String(text || "")
-            .trim()
-            .slice(0, 500);
-
-    if (!text) {
-        return;
-    }
-
-
-    const chatMessage =
-        makeMessage(
-            MESSAGE.CHAT,
-            {
-                playerId: "HOST",
-                name: player.name,
-                text
-            }
-        );
-
-
-    /*
-     * Отправляем сообщение P1, P2, P3...
-     */
-
-    this.broadcast(chatMessage);
-
-
-    /*
-     * И показываем его самому HOST.
-     */
-
-    if (this.onChat) {
-
-        this.onChat({
-            playerId: "HOST",
-            name: player.name,
-            text
-        });
-
-    }
-
-}
-
-
     /*
     ========================================================
     CONNECTION
@@ -131,6 +86,7 @@ export class GameServer {
     addConnection(connection) {
 
         connection.playerId = null;
+
 
         connection.channel.onmessage =
             event => {
@@ -190,16 +146,6 @@ export class GameServer {
                 break;
 
 
-            case MESSAGE.CHAT:
-
-                this.chat(
-                    connection,
-                    message
-                );
-
-                break;
-
-
             case MESSAGE.PING:
 
                 this.send(
@@ -228,14 +174,17 @@ export class GameServer {
             const message =
                 JSON.parse(raw);
 
+
             if (
                 !message ||
-                typeof message.type !== "string"
+                typeof message.type !==
+                    "string"
             ) {
 
                 return null;
 
             }
+
 
             return message;
 
@@ -259,6 +208,11 @@ export class GameServer {
         connection,
         message
     ) {
+
+        /*
+         * Уже зарегистрированный игрок
+         * не должен регистрироваться повторно.
+         */
 
         if (connection.playerId) {
             return;
@@ -291,11 +245,12 @@ export class GameServer {
 
 
         /*
-         * Сначала отправляем новому игроку
-         * полное состояние комнаты.
+         * Отправляем новому игроку
+         * первоначальное состояние комнаты.
          */
 
         this.send(
+
             connection,
 
             makeMessage(
@@ -311,14 +266,14 @@ export class GameServer {
                         this.world.snapshot()
 
                 }
-
             )
 
         );
 
 
         /*
-         * Затем сообщаем остальным.
+         * Сообщаем остальным игрокам
+         * о подключении.
          */
 
         this.broadcast(
@@ -333,7 +288,6 @@ export class GameServer {
                         )
 
                 }
-
             ),
 
             playerId
@@ -361,6 +315,7 @@ export class GameServer {
 
         const playerId =
             connection.playerId;
+
 
         if (!playerId) {
             return;
@@ -392,74 +347,6 @@ export class GameServer {
 
     /*
     ========================================================
-    CHAT
-    ========================================================
-    */
-
-    chat(connection, message) {
-
-    const playerId = connection.playerId;
-
-    if (!playerId) {
-        return;
-    }
-
-    const player =
-        this.world.getPlayer(playerId);
-
-    if (!player) {
-        return;
-    }
-
-    const text =
-        String(message.text || "")
-            .trim()
-            .slice(0, 500);
-
-    if (!text) {
-        return;
-    }
-
-    const chatMessage =
-        makeMessage(
-            MESSAGE.CHAT,
-            {
-                playerId,
-                name: player.name,
-                text
-            }
-        );
-
-
-    /*
-     * Отправляем всем подключённым игрокам.
-     */
-
-    this.broadcast(chatMessage);
-
-
-    /*
-     * И отдельно уведомляем браузер хоста.
-     *
-     * HOST не находится в this.connections,
-     * поэтому broadcast() до него не доберётся.
-     */
-
-    if (this.onChat) {
-
-        this.onChat({
-            playerId,
-            name: player.name,
-            text
-        });
-
-    }
-
-}
-
-
-    /*
-    ========================================================
     DISCONNECT
     ========================================================
     */
@@ -468,6 +355,7 @@ export class GameServer {
 
         const playerId =
             connection.playerId;
+
 
         if (!playerId) {
             return;
@@ -520,20 +408,54 @@ export class GameServer {
             makeMessage(
                 MESSAGE.SNAPSHOT,
                 {
+
                     roomCode:
                         this.roomCode,
 
                     snapshot
+
                 }
+
             )
 
         );
 
 
+        /*
+         * Хост не получает snapshot через
+         * WebRTC, поэтому сообщаем ему
+         * напрямую через callback.
+         */
+
         if (this.onSnapshot) {
 
             this.onSnapshot(
                 snapshot
+            );
+
+        }
+
+    }
+
+
+    /*
+    ========================================================
+    PLAYERS
+    ========================================================
+    */
+
+    updatePlayerList() {
+
+        if (
+            this.onPlayerListChanged
+        ) {
+
+            this.onPlayerListChanged(
+
+                Object.values(
+                    this.world.players
+                )
+
             );
 
         }
@@ -561,7 +483,9 @@ export class GameServer {
                 playerId ===
                 exceptPlayerId
             ) {
+
                 continue;
+
             }
 
 
@@ -589,7 +513,9 @@ export class GameServer {
         if (
             !connection.channel
         ) {
+
             return;
+
         }
 
 
@@ -597,32 +523,15 @@ export class GameServer {
             connection.channel.readyState !==
             "open"
         ) {
+
             return;
+
         }
 
 
         connection.channel.send(
             message
         );
-
-    }
-
-
-    updatePlayerList() {
-
-        if (
-            this.onPlayerListChanged
-        ) {
-
-            this.onPlayerListChanged(
-
-                Object.values(
-                    this.world.players
-                )
-
-            );
-
-        }
 
     }
 
