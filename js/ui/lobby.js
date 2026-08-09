@@ -2,14 +2,6 @@ export class LobbyUI {
     constructor(elements = {}) {
         this.elements = elements;
 
-        /*
-         * Только эти элементы являются экранами.
-         *
-         * ВАЖНО:
-         * Нельзя скрывать все elements подряд.
-         * В elements также находятся кнопки, input,
-         * textarea и прочие элементы интерфейса.
-         */
         this.views = [
             this.elements.menu,
             this.elements.hostLobby,
@@ -19,37 +11,36 @@ export class LobbyUI {
     }
 
 
-    /*
-    ============================================================
-    VIEWS
-    ============================================================
-    */
-
     showMenu() {
-        this.showView(
-            this.elements.menu
-        );
+        this.showView(this.elements.menu);
     }
 
 
     showHost() {
-        this.showView(
-            this.elements.hostLobby
-        );
+        this.showView(this.elements.hostLobby);
+    }
+
+
+    showHostGame() {
+        this.hideViews();
+
+        if (this.elements.hostLobby) {
+            this.elements.hostLobby.classList.remove("hidden");
+        }
+
+        if (this.elements.game) {
+            this.elements.game.classList.remove("hidden");
+        }
     }
 
 
     showClient() {
-        this.showView(
-            this.elements.clientLobby
-        );
+        this.showView(this.elements.clientLobby);
     }
 
 
     showGame() {
-        this.showView(
-            this.elements.game
-        );
+        this.showView(this.elements.game);
     }
 
 
@@ -60,114 +51,63 @@ export class LobbyUI {
             return;
         }
 
-        view.classList.remove(
-            "hidden"
-        );
+        view.classList.remove("hidden");
     }
 
 
     hideViews() {
-        for (
-            const view
-            of this.views
-        ) {
-            view.classList.add(
-                "hidden"
-            );
+        for (const view of this.views) {
+            view.classList.add("hidden");
         }
     }
 
 
-    /*
-    ============================================================
-    ROOM
-    ============================================================
-    */
-
     setRoomCode(roomCode) {
-        this.setText(
-            this.elements.roomCode,
-            roomCode
-        );
+        this.setText(this.elements.roomCode, roomCode);
     }
 
 
-    /*
-    ============================================================
-    STATUS
-    ============================================================
-    */
-
     setStatus(status) {
-        this.setText(
-            this.elements.status,
-            status
-        );
+        this.setText(this.elements.status, status);
     }
 
 
     setHostStatus(status) {
-        this.setText(
-            this.elements.hostStatus,
-            status
-        );
+        this.setText(this.elements.hostStatus, status);
     }
 
 
     setClientStatus(status) {
-        this.setText(
-            this.elements.clientStatus,
-            status
-        );
+        this.setText(this.elements.clientStatus, status);
     }
 
-
-    /*
-    ============================================================
-    WEBRTC OFFER
-    ============================================================
-    */
 
     setOffer(offer) {
         this.setValue(
             this.elements.offer,
-            serializeDescription(
-                offer
-            )
+            serializeDescription(offer)
         );
     }
 
 
     getOffer() {
         return parseDescription(
-            this.getValue(
-                this.elements.offer
-            )
+            this.getValue(this.elements.offer)
         );
     }
 
 
-    /*
-    ============================================================
-    WEBRTC ANSWER
-    ============================================================
-    */
-
     setAnswer(answer) {
         this.setValue(
             this.elements.answer,
-            serializeDescription(
-                answer
-            )
+            serializeDescription(answer)
         );
     }
 
 
     getAnswer() {
         return parseDescription(
-            this.getValue(
-                this.elements.answer
-            )
+            this.getValue(this.elements.answer)
         );
     }
 
@@ -177,39 +117,22 @@ export class LobbyUI {
             this.elements.clientAnswer,
             typeof answer === "string"
                 ? answer
-                : serializeDescription(
-                    answer
-                )
+                : serializeDescription(answer)
         );
     }
 
 
     getClientAnswer() {
-        return this.getValue(
-            this.elements.clientAnswer
-        );
+        return this.getValue(this.elements.clientAnswer);
     }
 
 
-    /*
-    ============================================================
-    PLAYERS
-    ============================================================
-    */
-
-    setPlayerCount(
-        count,
-        maxPlayers = null
-    ) {
-        if (
-            maxPlayers === null ||
-            maxPlayers === undefined
-        ) {
+    setPlayerCount(count, maxPlayers = null) {
+        if (maxPlayers === null || maxPlayers === undefined) {
             this.setText(
                 this.elements.playerCount,
                 String(count)
             );
-
             return;
         }
 
@@ -221,8 +144,7 @@ export class LobbyUI {
 
 
     setPlayers(players = []) {
-        const list =
-            this.elements.playerList;
+        const list = this.elements.playerList;
 
         if (!list) {
             return;
@@ -230,118 +152,58 @@ export class LobbyUI {
 
         list.innerHTML = "";
 
-        for (
-            const player
-            of players
-        ) {
-            const item =
-                document.createElement(
-                    "div"
-                );
+        for (const player of players) {
+            const item = document.createElement("div");
+            item.className = "lobby-player";
+            item.dataset.playerId = player.id;
 
-            item.className =
-                "lobby-player";
+            const name = document.createElement("span");
+            name.className = "lobby-player-name";
+            name.textContent = player.name;
 
-            item.dataset.playerId =
-                player.id;
+            const id = document.createElement("span");
+            id.className = "lobby-player-id";
+            id.textContent = player.id;
 
-            const name =
-                document.createElement(
-                    "span"
-                );
-
-            name.className =
-                "lobby-player-name";
-
-            name.textContent =
-                player.name;
-
-            const id =
-                document.createElement(
-                    "span"
-                );
-
-            id.className =
-                "lobby-player-id";
-
-            id.textContent =
-                player.id;
-
-            item.append(
-                name,
-                id
-            );
-
-            list.appendChild(
-                item
-            );
+            item.append(name, id);
+            list.appendChild(item);
         }
     }
 
 
-    /*
-    ============================================================
-    BUTTONS
-    ============================================================
-    */
-
-    setJoinButtonEnabled(
-        enabled
-    ) {
-        if (
-            !this.elements.joinButton
-        ) {
+    setJoinButtonEnabled(enabled) {
+        if (!this.elements.joinButton) {
             return;
         }
 
-        this.elements.joinButton.disabled =
-            !enabled;
+        this.elements.joinButton.disabled = !enabled;
     }
 
 
-    setHostButtonEnabled(
-        enabled
-    ) {
-        if (
-            !this.elements.hostButton
-        ) {
+    setHostButtonEnabled(enabled) {
+        if (!this.elements.hostButton) {
             return;
         }
 
-        this.elements.hostButton.disabled =
-            !enabled;
+        this.elements.hostButton.disabled = !enabled;
     }
 
 
-    /*
-    ============================================================
-    DOM HELPERS
-    ============================================================
-    */
-
-    setText(
-        element,
-        value
-    ) {
+    setText(element, value) {
         if (!element) {
             return;
         }
 
-        element.textContent =
-            value ?? "";
+        element.textContent = value ?? "";
     }
 
 
-    setValue(
-        element,
-        value
-    ) {
+    setValue(element, value) {
         if (!element) {
             return;
         }
 
-        element.value =
-            value ?? "";
+        element.value = value ?? "";
     }
 
 
@@ -355,37 +217,19 @@ export class LobbyUI {
 }
 
 
-/*
-============================================================
-WEBRTC DESCRIPTION SERIALIZATION
-============================================================
-*/
-
-function serializeDescription(
-    description
-) {
+function serializeDescription(description) {
     if (!description) {
         return "";
     }
 
-    /*
-     * Если уже передана готовая строка,
-     * не сериализуем её повторно.
-     */
-    if (
-        typeof description ===
-        "string"
-    ) {
+    if (typeof description === "string") {
         return description;
     }
 
     return JSON.stringify(
         {
-            type:
-                description.type,
-
-            sdp:
-                description.sdp
+            type: description.type,
+            sdp: description.sdp
         },
         null,
         2
@@ -393,40 +237,23 @@ function serializeDescription(
 }
 
 
-function parseDescription(
-    value
-) {
-    if (
-        !value ||
-        typeof value !==
-            "string"
-    ) {
+function parseDescription(value) {
+    if (!value || typeof value !== "string") {
         return null;
     }
 
     try {
-        const description =
-            JSON.parse(value);
+        const description = JSON.parse(value);
 
-        if (
-            !description ||
-            typeof description !==
-                "object"
-        ) {
+        if (!description || typeof description !== "object") {
             return null;
         }
 
-        if (
-            typeof description.type !==
-            "string"
-        ) {
+        if (typeof description.type !== "string") {
             return null;
         }
 
-        if (
-            typeof description.sdp !==
-            "string"
-        ) {
+        if (typeof description.sdp !== "string") {
             return null;
         }
 
