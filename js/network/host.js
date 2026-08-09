@@ -11,12 +11,7 @@ const RTC_CONFIG = {
 
 
 export class HostNetwork {
-    constructor(
-        gameServer,
-        {
-            iceServers = RTC_CONFIG.iceServers
-        } = {}
-    ) {
+    constructor(gameServer, { iceServers = RTC_CONFIG.iceServers } = {}) {
         if (!gameServer) {
             throw new Error("HostNetwork requires a GameServer.");
         }
@@ -86,6 +81,21 @@ export class HostNetwork {
         const socket = new WebSocket(endpoint);
         this.signalingSocket = socket;
 
+        socket.addEventListener("message", event => {
+            this.handleSignalingMessage(event.data);
+        });
+
+        socket.addEventListener("close", () => {
+            if (this.signalingSocket === socket) {
+                this.signalingSocket = null;
+            }
+            this.emit("signalingDisconnected");
+        });
+
+        socket.addEventListener("error", error => {
+            this.emit("signalingError", error);
+        });
+
         await new Promise((resolve, reject) => {
             let settled = false;
 
@@ -102,21 +112,9 @@ export class HostNetwork {
                 finish(resolve);
             }, { once: true });
 
-            socket.addEventListener("error", error => {
+            socket.addEventListener("error", () => {
                 finish(reject, new Error("Signaling server connection failed."));
-                this.emit("signalingError", error);
             }, { once: true });
-        });
-
-        socket.addEventListener("message", event => {
-            this.handleSignalingMessage(event.data);
-        });
-
-        socket.addEventListener("close", () => {
-            if (this.signalingSocket === socket) {
-                this.signalingSocket = null;
-            }
-            this.emit("signalingDisconnected");
         });
 
         return true;
@@ -144,27 +142,22 @@ export class HostNetwork {
 
         if (message.type === "peer_left") {
             const connectionId = this.peerConnections.get(message.peerId);
+
             if (connectionId) {
                 this.removeConnection(connectionId, true);
                 this.peerConnections.delete(message.peerId);
             }
+
             return;
         }
 
-        if (message.type === "signal") {
-            if (message.data?.type !== "answer") return;
-
-            const connectionId = message.data.connectionId;
-
+        if (message.type === "signal" && message.data?.type === "answer") {
             this.acceptAnswer(
                 message.data.answer,
-                connectionId
+                message.data.connectionId
             ).catch(error => {
                 console.error("Failed to accept automatic answer:", error);
-                this.emit("error", {
-                    error,
-                    peerId: message.from
-                });
+                this.emit("error", { error, peerId: message.from });
             });
         }
     }
@@ -172,19 +165,13 @@ export class HostNetwork {
     async createInviteForPeer(peerId) {
         const invite = await this.createInvite();
 
-        this.peerConnections.set(
-            peerId,
-            invite.connectionId
-        );
+        this.peerConnections.set(peerId, invite.connectionId);
 
-        this.sendSignal(
-            peerId,
-            {
-                type: "offer",
-                connectionId: invite.connectionId,
-                offer: invite.offer
-            }
-        );
+        this.sendSignal(peerId, {
+            type: "offer",
+            connectionId: invite.connectionId,
+            offer: invite.offer
+        });
 
         this.emit("inviteCreated", {
             peerId,
@@ -217,7 +204,6 @@ export class HostNetwork {
         const pc = new RTCPeerConnection({
             iceServers: this.iceServers
         });
-
         const channel = pc.createDataChannel("game");
 
         const connection = {
@@ -377,13 +363,7 @@ export class HostNetwork {
     closeSignaling() {
         if (!this.signalingSocket) return;
 
-        try {
-            this.signalingSocket.close();
-        }
-        catch {
-            // Ignore.
-        }
-
+        try { this.signalingSocket.close(); } catch {}
         this.signalingSocket = null;
     }
 
