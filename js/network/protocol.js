@@ -7,18 +7,16 @@
  */
 
 export const MESSAGE = Object.freeze({
-    /*
-     * Client -> Server
-     */
+    /* Client -> Server */
     JOIN: "join",
     INPUT: "input",
     PING: "ping",
+    PLAYER_READY: "player_ready",
 
-    /*
-     * Server -> Client
-     */
+    /* Server -> Client */
     WELCOME: "welcome",
     SNAPSHOT: "snapshot",
+    ROOM_STATE: "room_state",
     PLAYER_JOINED: "player_joined",
     PLAYER_LEFT: "player_left",
     ERROR: "error",
@@ -26,54 +24,18 @@ export const MESSAGE = Object.freeze({
 });
 
 
-/**
- * Создаёт сообщение протокола.
- *
- * Например:
- *
- * makeMessage(
- *     MESSAGE.INPUT,
- *     {
- *         action: "move",
- *         dx: 1,
- *         dy: 0
- *     }
- * )
- *
- * Вернёт JSON-строку:
- *
- * {
- *     "type": "input",
- *     "action": "move",
- *     "dx": 1,
- *     "dy": 0
- * }
- */
-export function makeMessage(
-    type,
-    data = {}
-) {
-    if (
-        typeof type !==
-        "string"
-    ) {
-        throw new TypeError(
-            "Message type must be a string."
-        );
+export function makeMessage(type, data = {}) {
+    if (typeof type !== "string") {
+        throw new TypeError("Message type must be a string.");
     }
-
 
     if (
         !data ||
-        typeof data !==
-            "object" ||
+        typeof data !== "object" ||
         Array.isArray(data)
     ) {
-        throw new TypeError(
-            "Message data must be an object."
-        );
+        throw new TypeError("Message data must be an object.");
     }
-
 
     return JSON.stringify({
         type,
@@ -82,52 +44,25 @@ export function makeMessage(
 }
 
 
-/**
- * Безопасно разбирает входящее сообщение.
- *
- * Возвращает:
- *
- * {
- *     type: "...",
- *     ...
- * }
- *
- * либо null, если сообщение
- * некорректное.
- */
-export function parseMessage(
-    raw
-) {
-    if (
-        typeof raw !==
-        "string"
-    ) {
+export function parseMessage(raw) {
+    if (typeof raw !== "string") {
         return null;
     }
 
-
     try {
-        const message =
-            JSON.parse(raw);
-
+        const message = JSON.parse(raw);
 
         if (
             !message ||
-            typeof message !==
-                "object" ||
+            typeof message !== "object" ||
             Array.isArray(message)
         ) {
             return null;
         }
 
-
-        if (
-            typeof message.type !==
-            "string"
-        ) {
+        if (typeof message.type !== "string") {
             return null;
         }
-
 
         return message;
     }
@@ -137,14 +72,6 @@ export function parseMessage(
 }
 
 
-/**
- * Проверяет, является ли сообщение
- * допустимым типом протокола.
- */
-export function isMessageType(
-    type
-) {
-    return Object.values(
-        MESSAGE
-    ).includes(type);
+export function isMessageType(type) {
+    return Object.values(MESSAGE).includes(type);
 }
