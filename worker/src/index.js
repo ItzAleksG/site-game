@@ -35,10 +35,8 @@ export default {
         const id = env.ROOMS.idFromName(room);
         const stub = env.ROOMS.get(id);
 
-        // Forward the original WebSocket request unchanged.
-        // Rebuilding the request with a custom headers object can strip the
-        // Upgrade header and make the Durable Object receive a normal HTTP
-        // request instead of a WebSocket upgrade.
+        // Forward the original WebSocket request unchanged so the
+        // Durable Object receives the WebSocket upgrade correctly.
         return stub.fetch(request);
     }
 };
@@ -68,6 +66,19 @@ export class RoomSignaling extends DurableObject {
 
         if (role !== "host" && role !== "client") {
             return new Response("Invalid role.", { status: 400 });
+        }
+
+        // A room only exists while its HOST is connected. idFromName(room)
+        // creates a Durable Object for any arbitrary name, so existence must
+        // be checked here instead of treating every syntactically valid code
+        // as an existing room.
+        if (role === "client" && !this.hostSocket) {
+            return new Response("Room not found or HOST is offline.", {
+                status: 404,
+                headers: {
+                    "content-type": "text/plain; charset=utf-8"
+                }
+            });
         }
 
         if (role === "host" && this.hostSocket) {
