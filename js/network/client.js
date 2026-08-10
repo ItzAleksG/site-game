@@ -24,6 +24,7 @@ export class ClientNetwork {
         this.signalingSocket = null;
         this.signalingRoom = null;
         this.offerTimeoutTimer = null;
+        this.roomReady = false;
     }
 
     on(event, handler) {
@@ -69,6 +70,7 @@ export class ClientNetwork {
         }
 
         this.closeSignaling();
+        this.roomReady = false;
         this.signalingRoom = String(roomCode ?? "").trim().toUpperCase();
 
         if (!this.signalingRoom) {
@@ -88,6 +90,12 @@ export class ClientNetwork {
 
             if (this.signalingSocket === socket) {
                 this.signalingSocket = null;
+            }
+
+            if (!this.roomReady && event.code !== 1000) {
+                this.emit("roomNotFound", new Error(
+                    "Комната недоступна или HOST отключён."
+                ));
             }
 
             this.emit("signalingDisconnected", {
@@ -114,8 +122,6 @@ export class ClientNetwork {
                     roomCode: this.signalingRoom,
                     endpoint
                 });
-
-                this.scheduleOfferTimeout();
                 finish(resolve);
             }, { once: true });
 
@@ -146,6 +152,13 @@ export class ClientNetwork {
             if (message.peerId) {
                 this.playerId = message.peerId;
             }
+            return;
+        }
+
+        if (message.type === "room_ready") {
+            this.roomReady = true;
+            this.scheduleOfferTimeout();
+            this.emit("roomReady", message);
             return;
         }
 
@@ -180,6 +193,7 @@ export class ClientNetwork {
 
         if (message.type === "host_left") {
             this.clearOfferTimeout();
+            this.roomReady = false;
             this.emit("disconnected");
         }
     }
@@ -372,6 +386,7 @@ export class ClientNetwork {
 
     closeSignaling() {
         this.clearOfferTimeout();
+        this.roomReady = false;
 
         if (!this.signalingSocket) return;
 
