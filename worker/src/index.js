@@ -35,12 +35,11 @@ export default {
         const id = env.ROOMS.idFromName(room);
         const stub = env.ROOMS.get(id);
 
-        return stub.fetch(request, {
-            headers: new Headers({
-                "x-room-code": room,
-                "x-room-role": role
-            })
-        });
+        // Forward the original WebSocket request unchanged.
+        // Rebuilding the request with a custom headers object can strip the
+        // Upgrade header and make the Durable Object receive a normal HTTP
+        // request instead of a WebSocket upgrade.
+        return stub.fetch(request);
     }
 };
 
@@ -59,8 +58,13 @@ export class RoomSignaling extends DurableObject {
             return new Response("WebSocket required", { status: 426 });
         }
 
-        const role = request.headers.get("x-room-role");
-        const room = request.headers.get("x-room-code");
+        const url = new URL(request.url);
+        const room = normalizeRoomCode(url.searchParams.get("room"));
+        const role = url.searchParams.get("role");
+
+        if (!room || !ROOM_CODE_PATTERN.test(room)) {
+            return new Response("Invalid room code.", { status: 400 });
+        }
 
         if (role !== "host" && role !== "client") {
             return new Response("Invalid role.", { status: 400 });
