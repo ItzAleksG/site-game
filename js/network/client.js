@@ -291,6 +291,12 @@ export class ClientNetwork {
         });
     }
 
+    setReady(ready = true) {
+        return this.sendMessage(MESSAGE.PLAYER_READY, {
+            ready: Boolean(ready)
+        });
+    }
+
     move(dx, dy) {
         return this.sendMessage(MESSAGE.INPUT, {
             action: "move",
