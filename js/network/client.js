@@ -74,10 +74,7 @@ export class ClientNetwork {
             throw new Error("Room code is required for signaling.");
         }
 
-        const endpoint = new URL(url);
-        endpoint.searchParams.set("room", this.signalingRoom);
-        endpoint.searchParams.set("role", "client");
-
+        const endpoint = buildSignalingUrl(url, this.signalingRoom, "client");
         const socket = new WebSocket(endpoint);
         this.signalingSocket = socket;
 
@@ -85,11 +82,15 @@ export class ClientNetwork {
             this.handleSignalingMessage(event.data);
         });
 
-        socket.addEventListener("close", () => {
+        socket.addEventListener("close", event => {
             if (this.signalingSocket === socket) {
                 this.signalingSocket = null;
             }
-            this.emit("signalingDisconnected");
+
+            this.emit("signalingDisconnected", {
+                code: event.code,
+                reason: event.reason
+            });
         });
 
         socket.addEventListener("error", error => {
@@ -107,13 +108,17 @@ export class ClientNetwork {
 
             socket.addEventListener("open", () => {
                 this.emit("signalingConnected", {
-                    roomCode: this.signalingRoom
+                    roomCode: this.signalingRoom,
+                    endpoint
                 });
                 finish(resolve);
             }, { once: true });
 
             socket.addEventListener("error", () => {
-                finish(reject, new Error("Signaling server connection failed."));
+                finish(
+                    reject,
+                    new Error(`Signaling server connection failed: ${endpoint}`)
+                );
             }, { once: true });
         });
 
@@ -325,6 +330,30 @@ export class ClientNetwork {
         this.closeSignaling();
         this.closePeerConnection();
     }
+}
+
+
+function buildSignalingUrl(value, roomCode, role) {
+    let raw = String(value ?? "").trim();
+
+    if (!raw) {
+        throw new Error("Signaling URL is not configured.");
+    }
+
+    raw = raw.replace(/^wss:\/+(?=[^/])/i, "wss://");
+    raw = raw.replace(/^ws:\/+(?=[^/])/i, "ws://");
+    raw = raw.replace(/^https:\/+(?=[^/])/i, "https://");
+    raw = raw.replace(/^http:\/+(?=[^/])/i, "http://");
+
+    if (!/^wss?:\/\//i.test(raw)) {
+        throw new Error(`Invalid signaling URL: ${raw}`);
+    }
+
+    const endpoint = new URL(raw);
+    endpoint.searchParams.set("room", roomCode);
+    endpoint.searchParams.set("role", role);
+
+    return endpoint.toString();
 }
 
 
