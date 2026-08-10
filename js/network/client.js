@@ -23,6 +23,7 @@ export class ClientNetwork {
         this.handlers = new Map();
         this.signalingSocket = null;
         this.signalingRoom = null;
+        this.offerTimeoutTimer = null;
     }
 
     on(event, handler) {
@@ -83,6 +84,8 @@ export class ClientNetwork {
         });
 
         socket.addEventListener("close", event => {
+            this.clearOfferTimeout();
+
             if (this.signalingSocket === socket) {
                 this.signalingSocket = null;
             }
@@ -111,6 +114,8 @@ export class ClientNetwork {
                     roomCode: this.signalingRoom,
                     endpoint
                 });
+
+                this.scheduleOfferTimeout();
                 finish(resolve);
             }, { once: true });
 
@@ -137,14 +142,27 @@ export class ClientNetwork {
 
         if (!message || typeof message !== "object") return;
 
+        if (message.type === "connected") {
+            if (message.peerId) {
+                this.playerId = message.peerId;
+            }
+            return;
+        }
+
         if (message.type === "signal" && message.data?.type === "offer") {
+            this.clearOfferTimeout();
+
             this.connect(message.data.offer)
                 .then(answer => {
-                    this.sendSignal("host", {
+                    const sent = this.sendSignal("host", {
                         type: "answer",
                         connectionId: message.data.connectionId,
                         answer
                     });
+
+                    if (!sent) {
+                        throw new Error("Signaling connection closed before the WebRTC answer was sent.");
+                    }
                 })
                 .catch(error => {
                     console.error("Failed to create automatic WebRTC answer:", error);
@@ -153,7 +171,15 @@ export class ClientNetwork {
             return;
         }
 
+        if (message.type === "signal_error") {
+            this.emit("error", new Error(
+                message.message || "Signaling server could not deliver the message."
+            ));
+            return;
+        }
+
         if (message.type === "host_left") {
+            this.clearOfferTimeout();
             this.emit("disconnected");
         }
     }
@@ -311,6 +337,25 @@ export class ClientNetwork {
         });
     }
 
+    scheduleOfferTimeout(timeout = 15000) {
+        this.clearOfferTimeout();
+
+        this.offerTimeoutTimer = setTimeout(() => {
+            this.offerTimeoutTimer = null;
+            this.emit(
+                "offerTimeout",
+                new Error("HOST did not send a WebRTC offer within 15 seconds.")
+            );
+        }, timeout);
+    }
+
+    clearOfferTimeout() {
+        if (!this.offerTimeoutTimer) return;
+
+        clearTimeout(this.offerTimeoutTimer);
+        this.offerTimeoutTimer = null;
+    }
+
     closePeerConnection() {
         if (this.channel) {
             try { this.channel.close(); } catch {}
@@ -326,6 +371,8 @@ export class ClientNetwork {
     }
 
     closeSignaling() {
+        this.clearOfferTimeout();
+
         if (!this.signalingSocket) return;
 
         try { this.signalingSocket.close(); } catch {}
