@@ -37,7 +37,7 @@ export class LobbyUI {
          * Ник приглашённого игрока не должен наследоваться
          * из localStorage хоста. Каждый клиент выбирает его сам.
          */
-        if (this.elements.clientPlayerName) {
+        if (this.elements.clientPlayerName && !this.elements.clientPlayerName.value) {
             this.elements.clientPlayerName.value = "";
         }
     }
@@ -51,10 +51,7 @@ export class LobbyUI {
     showView(view) {
         this.hideViews();
 
-        if (!view) {
-            return;
-        }
-
+        if (!view) return;
         view.classList.remove("hidden");
     }
 
@@ -133,10 +130,7 @@ export class LobbyUI {
 
     setPlayerCount(count, maxPlayers = null) {
         if (maxPlayers === null || maxPlayers === undefined) {
-            this.setText(
-                this.elements.playerCount,
-                String(count)
-            );
+            this.setText(this.elements.playerCount, String(count));
             return;
         }
 
@@ -149,10 +143,7 @@ export class LobbyUI {
 
     setPlayers(players = []) {
         const list = this.elements.playerList;
-
-        if (!list) {
-            return;
-        }
+        if (!list) return;
 
         list.innerHTML = "";
 
@@ -165,70 +156,58 @@ export class LobbyUI {
             name.className = "lobby-player-name";
             name.textContent = player.name;
 
+            const state = document.createElement("span");
+            state.className = "lobby-player-state";
+            state.textContent = player.id === "HOST"
+                ? "HOST"
+                : player.ready
+                    ? "Готов"
+                    : "Не готов";
+
             const id = document.createElement("span");
             id.className = "lobby-player-id";
             id.textContent = player.id;
 
-            item.append(name, id);
+            item.append(name, state, id);
             list.appendChild(item);
         }
     }
 
 
     setJoinButtonEnabled(enabled) {
-        if (!this.elements.joinButton) {
-            return;
-        }
-
+        if (!this.elements.joinButton) return;
         this.elements.joinButton.disabled = !enabled;
     }
 
 
     setHostButtonEnabled(enabled) {
-        if (!this.elements.hostButton) {
-            return;
-        }
-
+        if (!this.elements.hostButton) return;
         this.elements.hostButton.disabled = !enabled;
     }
 
 
     setText(element, value) {
-        if (!element) {
-            return;
-        }
-
+        if (!element) return;
         element.textContent = value ?? "";
     }
 
 
     setValue(element, value) {
-        if (!element) {
-            return;
-        }
-
+        if (!element) return;
         element.value = value ?? "";
     }
 
 
     getValue(element) {
-        if (!element) {
-            return "";
-        }
-
+        if (!element) return "";
         return element.value ?? "";
     }
 }
 
 
 function serializeDescription(description) {
-    if (!description) {
-        return "";
-    }
-
-    if (typeof description === "string") {
-        return description;
-    }
+    if (!description) return "";
+    if (typeof description === "string") return description;
 
     return JSON.stringify(
         {
@@ -242,24 +221,14 @@ function serializeDescription(description) {
 
 
 function parseDescription(value) {
-    if (!value || typeof value !== "string") {
-        return null;
-    }
+    if (!value || typeof value !== "string") return null;
 
     try {
         const description = JSON.parse(value);
 
-        if (!description || typeof description !== "object") {
-            return null;
-        }
-
-        if (typeof description.type !== "string") {
-            return null;
-        }
-
-        if (typeof description.sdp !== "string") {
-            return null;
-        }
+        if (!description || typeof description !== "object") return null;
+        if (typeof description.type !== "string") return null;
+        if (typeof description.sdp !== "string") return null;
 
         return description;
     }
