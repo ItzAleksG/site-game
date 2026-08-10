@@ -9,21 +9,22 @@ import {
 } from "./world.js";
 
 
+export const ROOM_STATUS = Object.freeze({
+    WAITING: "waiting",
+    PLAYING: "playing"
+});
+
+
 export class GameServer {
     constructor(options = {}) {
         if (typeof options === "string") {
-            options = {
-                roomCode: options
-            };
+            options = { roomCode: options };
         }
 
-        this.roomCode =
-            String(options.roomCode || "");
+        this.roomCode = String(options.roomCode || "");
 
         if (!this.roomCode) {
-            throw new Error(
-                "GameServer requires roomCode."
-            );
+            throw new Error("GameServer requires roomCode.");
         }
 
         this.maxPlayers = Math.max(
@@ -31,34 +32,17 @@ export class GameServer {
             Number(options.maxPlayers) || 8
         );
 
-        this.world = new World(
-            options.world || {}
-        );
-
-        /*
-         * playerId -> WebRTC connection
-         *
-         * HOST сюда не попадает:
-         * HOST находится непосредственно
-         * внутри браузера и управляется
-         * через hostInput().
-         */
+        this.world = new World(options.world || {});
         this.connections = new Map();
-
         this.nextPlayerNumber = 1;
+        this.status = ROOM_STATUS.WAITING;
 
-        /*
-         * Application/UI callbacks.
-         */
         this.onPlayerJoined = null;
         this.onPlayerLeft = null;
         this.onPlayerListChanged = null;
         this.onSnapshot = null;
         this.onRoomStateChanged = null;
 
-        /*
-         * HOST — первый игрок комнаты.
-         */
         this.world.addPlayer({
             id: "HOST",
             name: "Host"
@@ -66,50 +50,37 @@ export class GameServer {
     }
 
 
-    /*
-    ============================================================
-    HOST
-    ============================================================
-    */
+    /* ========================================================
+       HOST
+       ======================================================== */
 
     setHostName(name) {
-        const host =
-            this.world.getPlayer("HOST");
+        const host = this.world.getPlayer("HOST");
+        if (!host) return false;
 
-        if (!host) {
-            return false;
-        }
-
-        host.name =
-            sanitizeName(name);
+        host.name = sanitizeName(name);
+        host.ready = true;
 
         this.notifyPlayerListChanged();
         this.notifySnapshot();
         this.notifyRoomState();
-
         return true;
     }
 
 
     hostInput(message) {
-        if (!message) {
-            return false;
-        }
+        if (!message) return false;
 
         return this.input(
-            {
-                playerId: "HOST"
-            },
+            { playerId: "HOST" },
             message
         );
     }
 
 
-    /*
-    ============================================================
-    ROOM
-    ============================================================
-    */
+    /* ========================================================
+       ROOM
+       ======================================================== */
 
     getPlayerCount() {
         return this.world.players.size;
@@ -127,78 +98,100 @@ export class GameServer {
 
 
     isFull() {
-        return (
-            this.getPlayerCount() >=
-            this.maxPlayers
-        );
+        return this.getPlayerCount() >= this.maxPlayers;
+    }
+
+
+    canStart() {
+        if (this.status !== ROOM_STATUS.WAITING) return false;
+        if (this.getPlayerCount() < 2) return false;
+
+        return this.getPlayers()
+            .filter(player => player.id !== "HOST")
+            .every(player => player.ready === true);
     }
 
 
     getRoomState() {
         return {
-            roomCode:
-                this.roomCode,
-
-            playerCount:
-                this.getPlayerCount(),
-
-            maxPlayers:
-                this.maxPlayers,
-
-            players:
-                this.getPlayers()
+            roomCode: this.roomCode,
+            status: this.status,
+            playerCount: this.getPlayerCount(),
+            maxPlayers: this.maxPlayers,
+            canStart: this.canStart(),
+            players: this.getPlayers().map(player => ({
+                id: player.id,
+                name: player.name,
+                ready: player.ready === true
+            }))
         };
     }
 
 
-    /*
-    ============================================================
-    NETWORK INPUT
-    ============================================================
-    */
+    /* ========================================================
+       ROOM LIFECYCLE
+       ======================================================== */
 
-    receive(connection, raw) {
-        if (!connection) {
-            return;
+    setPlayerReady(connection, ready = true) {
+        if (!connection?.playerId) return false;
+        if (this.status !== ROOM_STATUS.WAITING) return false;
+
+        const player = this.world.getPlayer(connection.playerId);
+        if (!player) return false;
+
+        player.ready = Boolean(ready);
+
+        this.broadcastRoomState();
+        this.notifyPlayerListChanged();
+        return true;
+    }
+
+
+    startGame() {
+        if (!this.canStart()) {
+            return false;
         }
 
-        const message =
-            parseMessage(raw);
+        this.status = ROOM_STATUS.PLAYING;
+        this.broadcastRoomState();
+        this.broadcastSnapshot();
+        return true;
+    }
+
+
+    /* ========================================================
+       NETWORK INPUT
+       ======================================================== */
+
+    receive(connection, raw) {
+        if (!connection) return;
+
+        const message = parseMessage(raw);
 
         if (!message) {
-            this.sendError(
-                connection,
-                "Invalid message."
-            );
-
+            this.sendError(connection, "Invalid message.");
             return;
         }
 
         switch (message.type) {
             case MESSAGE.JOIN:
-                this.join(
-                    connection,
-                    message
-                );
+                this.join(connection, message);
                 break;
 
             case MESSAGE.INPUT:
-                this.input(
-                    connection,
-                    message
-                );
+                this.input(connection, message);
+                break;
+
+            case MESSAGE.PLAYER_READY:
+                this.setPlayerReady(connection, message.ready);
                 break;
 
             case MESSAGE.PING:
                 this.send(
                     connection,
-                    makeMessage(
-                        MESSAGE.PONG,
-                        {
-                            time:
-                                Date.now()
-                        }
-                    )
+                    makeMessage(MESSAGE.PONG, {
+                        time: Date.now()
+                    })
                 );
                 break;
 
@@ -212,345 +205,201 @@ export class GameServer {
     }
 
 
-    /*
-    ============================================================
-    JOIN
-    ============================================================
-    */
+    /* ========================================================
+       JOIN
+       ======================================================== */
 
     join(connection, message) {
-        if (!connection) {
-            return;
-        }
+        if (!connection) return;
 
-        /*
-         * Защита от повторного JOIN.
-         */
         if (connection.playerId) {
             this.sendError(
                 connection,
                 "Player is already registered."
             );
-
             return;
         }
 
-        /*
-         * HOST уже занимает один слот.
-         */
-        if (this.isFull()) {
+        if (this.status !== ROOM_STATUS.WAITING) {
             this.sendError(
                 connection,
-                "Room is full."
+                "Game has already started."
             );
-
             return;
         }
 
-        const playerId =
-            `P-${this.nextPlayerNumber++}`;
+        if (this.isFull()) {
+            this.sendError(connection, "Room is full.");
+            return;
+        }
 
-        const name =
-            sanitizeName(message.name);
+        const playerId = `P-${this.nextPlayerNumber++}`;
+        const player = this.world.addPlayer({
+            id: playerId,
+            name: sanitizeName(message.name)
+        });
 
-        /*
-         * Сначала создаём игрока в World.
-         */
-        const player =
-            this.world.addPlayer({
-                id: playerId,
-                name
-            });
-
-        /*
-         * Только после успешного создания
-         * регистрируем connection.
-         */
-        connection.playerId =
-            playerId;
-
-        this.connections.set(
-            playerId,
-            connection
-        );
-
-        /*
-        --------------------------------------------------------
-        WELCOME
-        --------------------------------------------------------
-        */
+        player.ready = false;
+        connection.playerId = playerId;
+        this.connections.set(playerId, connection);
 
         this.send(
             connection,
-            makeMessage(
-                MESSAGE.WELCOME,
-                {
-                    roomCode:
-                        this.roomCode,
-
-                    playerId,
-
-                    snapshot:
-                        this.world.snapshot()
-                }
-            )
+            makeMessage(MESSAGE.WELCOME, {
+                roomCode: this.roomCode,
+                playerId,
+                snapshot: this.world.snapshot(),
+                roomState: this.getRoomState()
+            })
         );
 
-        /*
-        --------------------------------------------------------
-        PLAYER_JOINED
-        --------------------------------------------------------
-        */
-
         this.broadcast(
-            makeMessage(
-                MESSAGE.PLAYER_JOINED,
-                {
-                    player
-                }
-            ),
+            makeMessage(MESSAGE.PLAYER_JOINED, { player }),
             playerId
         );
 
-        /*
-        --------------------------------------------------------
-        CALLBACKS
-        --------------------------------------------------------
-        */
-
-        if (
-            typeof this.onPlayerJoined ===
-            "function"
-        ) {
-            this.onPlayerJoined(
-                player
-            );
-        }
-
+        this.broadcastRoomState();
         this.notifyPlayerListChanged();
         this.notifySnapshot();
         this.notifyRoomState();
+
+        if (typeof this.onPlayerJoined === "function") {
+            this.onPlayerJoined(player);
+        }
     }
 
 
-    /*
-    ============================================================
-    INPUT
-    ============================================================
-    */
+    /* ========================================================
+       INPUT
+       ======================================================== */
 
     input(connection, message) {
-        if (!connection) {
+        if (!connection?.playerId) {
+            if (connection) {
+                this.sendError(
+                    connection,
+                    "Player is not registered."
+                );
+            }
             return false;
         }
 
-        const playerId =
-            connection.playerId;
-
-        if (!playerId) {
-            this.sendError(
-                connection,
-                "Player is not registered."
-            );
-
+        if (this.status !== ROOM_STATUS.PLAYING) {
             return false;
         }
 
-        if (
-            message.action !==
-            "move"
-        ) {
-            return false;
-        }
+        if (message.action !== "move") return false;
 
-        const moved =
-            this.world.movePlayer(
-                playerId,
-                message.dx,
-                message.dy
-            );
+        const moved = this.world.movePlayer(
+            connection.playerId,
+            message.dx,
+            message.dy
+        );
 
-        if (!moved) {
-            return false;
-        }
+        if (!moved) return false;
 
-        /*
-         * World уже имеет собственный tick.
-         */
         this.world.update();
-
         this.broadcastSnapshot();
-
         return true;
     }
 
 
-    /*
-    ============================================================
-    DISCONNECT
-    ============================================================
-    */
+    /* ========================================================
+       DISCONNECT
+       ======================================================== */
 
     disconnect(connection) {
-        if (!connection) {
-            return false;
-        }
+        if (!connection?.playerId) return false;
 
-        const playerId =
-            connection.playerId;
+        const playerId = connection.playerId;
+        connection.playerId = null;
+        this.connections.delete(playerId);
 
-        if (!playerId) {
-            return false;
-        }
-
-        /*
-         * Не позволяем повторно удалить
-         * одного и того же игрока.
-         */
-        connection.playerId =
-            null;
-
-        this.connections.delete(
-            playerId
-        );
-
-        const player =
-            this.world.getPlayer(
-                playerId
-            );
-
-        this.world.removePlayer(
-            playerId
-        );
+        const player = this.world.getPlayer(playerId);
+        this.world.removePlayer(playerId);
 
         this.broadcast(
-            makeMessage(
-                MESSAGE.PLAYER_LEFT,
-                {
-                    playerId
-                }
-            )
+            makeMessage(MESSAGE.PLAYER_LEFT, { playerId })
         );
 
-        if (
-            typeof this.onPlayerLeft ===
-            "function"
-        ) {
-            this.onPlayerLeft(
-                player
-            );
+        if (typeof this.onPlayerLeft === "function") {
+            this.onPlayerLeft(player);
         }
 
         this.notifyPlayerListChanged();
         this.notifySnapshot();
         this.notifyRoomState();
+        this.broadcastRoomState();
 
         return true;
     }
 
 
-    /*
-    ============================================================
-    SNAPSHOT
-    ============================================================
-    */
+    /* ========================================================
+       SNAPSHOT
+       ======================================================== */
 
     broadcastSnapshot() {
-        const snapshot =
-            this.world.snapshot();
+        const snapshot = this.world.snapshot();
+        const message = makeMessage(MESSAGE.SNAPSHOT, {
+            roomCode: this.roomCode,
+            snapshot
+        });
 
-        const message =
-            makeMessage(
-                MESSAGE.SNAPSHOT,
-                {
-                    roomCode:
-                        this.roomCode,
-
-                    snapshot
-                }
-            );
-
-        /*
-         * Отправляем всем WebRTC-клиентам.
-         */
         this.broadcast(message);
 
-        /*
-         * HOST получает snapshot
-         * напрямую, без WebRTC.
-         */
-        if (
-            typeof this.onSnapshot ===
-            "function"
-        ) {
-            this.onSnapshot(
-                snapshot
-            );
+        if (typeof this.onSnapshot === "function") {
+            this.onSnapshot(snapshot);
         }
     }
 
 
     notifySnapshot() {
-        if (
-            typeof this.onSnapshot ===
-            "function"
-        ) {
-            this.onSnapshot(
-                this.world.snapshot()
-            );
+        if (typeof this.onSnapshot === "function") {
+            this.onSnapshot(this.world.snapshot());
         }
     }
 
 
-    /*
-    ============================================================
-    PLAYER LIST
-    ============================================================
-    */
+    /* ========================================================
+       ROOM STATE
+       ======================================================== */
+
+    broadcastRoomState() {
+        const roomState = this.getRoomState();
+
+        this.broadcast(
+            makeMessage(MESSAGE.ROOM_STATE, { roomState })
+        );
+
+        this.notifyRoomState();
+    }
+
 
     notifyPlayerListChanged() {
-        if (
-            typeof this.onPlayerListChanged ===
-            "function"
-        ) {
-            this.onPlayerListChanged(
-                this.getPlayers()
-            );
+        if (typeof this.onPlayerListChanged === "function") {
+            this.onPlayerListChanged(this.getPlayers());
         }
     }
 
 
     notifyRoomState() {
-        if (
-            typeof this.onRoomStateChanged ===
-            "function"
-        ) {
-            this.onRoomStateChanged(
-                this.getRoomState()
-            );
+        if (typeof this.onRoomStateChanged === "function") {
+            this.onRoomStateChanged(this.getRoomState());
         }
     }
 
 
-    /*
-    ============================================================
-    SEND
-    ============================================================
-    */
+    /* ========================================================
+       SEND / BROADCAST
+       ======================================================== */
 
     send(connection, message) {
-        if (!connection) {
-            return false;
-        }
+        if (!connection) return false;
 
-        const channel =
-            connection.channel;
+        const channel = connection.channel;
 
-        if (
-            !channel ||
-            channel.readyState !==
-            "open"
-        ) {
+        if (!channel || channel.readyState !== "open") {
             return false;
         }
 
@@ -559,48 +408,19 @@ export class GameServer {
             return true;
         }
         catch (error) {
-            console.error(
-                "GameServer.send failed:",
-                error
-            );
-
+            console.error("GameServer.send failed:", error);
             return false;
         }
     }
 
 
-    /*
-    ============================================================
-    BROADCAST
-    ============================================================
-    */
-
-    broadcast(
-        message,
-        exceptPlayerId = null
-    ) {
+    broadcast(message, exceptPlayerId = null) {
         let sent = 0;
 
-        for (
-            const [
-                playerId,
-                connection
-            ]
-            of this.connections
-        ) {
-            if (
-                playerId ===
-                exceptPlayerId
-            ) {
-                continue;
-            }
+        for (const [playerId, connection] of this.connections) {
+            if (playerId === exceptPlayerId) continue;
 
-            if (
-                this.send(
-                    connection,
-                    message
-                )
-            ) {
+            if (this.send(connection, message)) {
                 sent++;
             }
         }
@@ -609,47 +429,19 @@ export class GameServer {
     }
 
 
-    /*
-    ============================================================
-    ERROR
-    ============================================================
-    */
-
-    sendError(
-        connection,
-        message
-    ) {
+    sendError(connection, message) {
         this.send(
             connection,
-            makeMessage(
-                MESSAGE.ERROR,
-                {
-                    message
-                }
-            )
+            makeMessage(MESSAGE.ERROR, { message })
         );
     }
 
 
-    /*
-    ============================================================
-    CLOSE
-    ============================================================
-    */
-
     close() {
-        const connections =
-            [
-                ...this.connections.values()
-            ];
+        const connections = [...this.connections.values()];
 
-        for (
-            const connection
-            of connections
-        ) {
-            this.disconnect(
-                connection
-            );
+        for (const connection of connections) {
+            this.disconnect(connection);
         }
 
         this.connections.clear();
@@ -657,29 +449,11 @@ export class GameServer {
 }
 
 
-/*
-============================================================
-HELPERS
-============================================================
-*/
-
 function sanitizeName(name) {
-    const value =
-        String(
-            name ?? ""
-        )
+    const value = String(name ?? "")
         .trim()
-        .replace(
-            /\s+/g,
-            " "
-        )
-        .slice(
-            0,
-            24
-        );
+        .replace(/\s+/g, " ")
+        .slice(0, 24);
 
-    return (
-        value ||
-        "Player"
-    );
+    return value || "Player";
 }
