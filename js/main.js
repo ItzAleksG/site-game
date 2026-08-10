@@ -428,7 +428,7 @@ function prepareClientForRoom(roomCode) {
     }
 
     lobbyUI.setClientStatus(
-        `Комната ${roomCode} найдена. Введи ник и подключись.`
+        `Комната ${roomCode}. Введи ник и подключись.`
     );
 }
 
@@ -476,7 +476,7 @@ async function createClientConnection() {
 
         if (automaticSignalingEnabled && state.roomCode) {
             lobbyUI.setClientStatus(
-                `Подключаюсь к комнате ${state.roomCode}...`
+                `Проверяю комнату ${state.roomCode}...`
             );
 
             await state.clientNetwork.connectSignaling(
@@ -485,7 +485,7 @@ async function createClientConnection() {
             );
 
             lobbyUI.setClientStatus(
-                "Ожидаю WebRTC offer от HOST..."
+                "Комната существует. Ожидаю WebRTC offer от HOST..."
             );
             return;
         }
@@ -525,8 +525,26 @@ function setupClientNetworkHandlers() {
 
     client.on("signalingConnected", () => {
         lobbyUI.setClientStatus(
-            `Сигнализация подключена. Ожидаю HOST комнаты ${state.roomCode}...`
+            `Проверяю доступность комнаты ${state.roomCode}...`
         );
+    });
+
+    client.on("roomReady", () => {
+        lobbyUI.setClientStatus(
+            "Комната найдена. Ожидаю WebRTC offer от HOST..."
+        );
+    });
+
+    client.on("roomNotFound", error => {
+        lobbyUI.setClientStatus(`Комната недоступна: ${error.message}`);
+        elements.createAnswerButton.disabled = false;
+    });
+
+    client.on("offerTimeout", error => {
+        lobbyUI.setClientStatus(
+            `HOST не прислал WebRTC offer: ${error.message}`
+        );
+        elements.createAnswerButton.disabled = false;
     });
 
     client.on("connected", () => {
@@ -620,38 +638,19 @@ function applyClientRoomState(roomState) {
         return;
     }
 
-    if (state.playerId) {
-        lobbyUI.showClient();
-
-        if (state.clientReady) {
-            lobbyUI.setClientStatus("Ты готов. Ожидаем запуска игры HOST.");
-        }
-        else {
-            lobbyUI.setClientStatus("Нажми «Готов», когда будешь готов к игре.");
-        }
-    }
+    elements.gameStatus.textContent = "Ожидание запуска игры";
 }
 
 
 function toggleClientReady() {
-    if (!state.clientNetwork || !state.playerId) return;
-    if (state.roomStatus !== "waiting") return;
+    if (!state.clientNetwork || state.roomStatus !== "waiting") return;
 
     const nextReady = !state.clientReady;
 
-    if (!state.clientNetwork.setReady(nextReady)) {
-        lobbyUI.setClientStatus("Не удалось отправить готовность.");
-        return;
+    if (state.clientNetwork.setReady(nextReady)) {
+        state.clientReady = nextReady;
+        updateClientReadyButton();
     }
-
-    state.clientReady = nextReady;
-    updateClientReadyButton();
-
-    lobbyUI.setClientStatus(
-        nextReady
-            ? "Ты готов. Ожидаем запуска игры HOST."
-            : "Готовность снята."
-    );
 }
 
 
@@ -659,202 +658,130 @@ function updateClientReadyButton() {
     if (!elements.clientReadyButton) return;
 
     elements.clientReadyButton.disabled =
-        !state.clientNetwork ||
-        !state.playerId ||
-        state.roomStatus !== "waiting";
+        !state.clientNetwork || state.roomStatus !== "waiting";
 
     elements.clientReadyButton.textContent =
-        state.clientReady
-            ? "Снять готовность"
-            : "Готов";
+        state.clientReady ? "Снять готовность" : "Готов";
 }
 
 
-/* ============================================================
-   INPUT
-   ============================================================ */
-
 function handleKeyboard(event) {
-    const target = event.target;
+    if (state.mode !== "host" && state.mode !== "client") return;
+    if (state.roomStatus !== "playing") return;
 
-    if (
-        target instanceof HTMLInputElement ||
-        target instanceof HTMLTextAreaElement ||
-        target instanceof HTMLButtonElement
-    ) {
-        return;
-    }
-
+    const key = event.key.toLowerCase();
     let dx = 0;
     let dy = 0;
 
-    switch (event.key.toLowerCase()) {
-        case "w":
-        case "arrowup":
-            dy = -1;
-            break;
-        case "s":
-        case "arrowdown":
-            dy = 1;
-            break;
-        case "a":
-        case "arrowleft":
-            dx = -1;
-            break;
-        case "d":
-        case "arrowright":
-            dx = 1;
-            break;
-        default:
-            return;
-    }
+    if (key === "w" || key === "arrowup") dy = -1;
+    if (key === "s" || key === "arrowdown") dy = 1;
+    if (key === "a" || key === "arrowleft") dx = -1;
+    if (key === "d" || key === "arrowright") dx = 1;
+
+    if (dx === 0 && dy === 0) return;
 
     event.preventDefault();
 
-    if (state.roomStatus !== "playing") return;
-
-    if (state.mode === "host" && state.gameServer) {
-        state.gameServer.hostInput({ action: "move", dx, dy });
+    if (state.mode === "host") {
+        state.gameServer?.movePlayer("HOST", dx, dy);
         return;
     }
 
-    if (state.mode === "client" && state.clientNetwork) {
-        state.clientNetwork.move(dx, dy);
-    }
+    state.clientNetwork?.move(dx, dy);
 }
 
 
 /* ============================================================
-   DATA / ROOM HELPERS
+   LINKS / STORAGE / HELPERS
    ============================================================ */
 
-function createRoomCode() {
-    const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
-    const bytes = new Uint8Array(6);
-    crypto.getRandomValues(bytes);
+function createInviteLink(data) {
+    const payload = encodeData(data);
+    return `${location.origin}${location.pathname}#invite=${encodeURIComponent(payload)}`;
+}
 
-    return [...bytes]
-        .map(byte => alphabet[byte % alphabet.length])
-        .join("");
+
+function createAnswerLink(data) {
+    const payload = encodeData({
+        type: "answer",
+        ...data
+    });
+
+    return `${location.origin}${location.pathname}#answer=${encodeURIComponent(payload)}`;
+}
+
+
+function getInviteFromHash() {
+    const hash = location.hash;
+
+    if (!hash.startsWith("#invite=")) return null;
+
+    try {
+        const payload = decodeURIComponent(hash.slice("#invite=".length));
+        const data = decodeDataFromText(payload);
+
+        if (data.type !== "invite") {
+            return null;
+        }
+
+        return data;
+    }
+    catch {
+        return null;
+    }
+}
+
+
+function getRoomCodeFromHash() {
+    const hash = location.hash;
+
+    if (!hash.startsWith("#room=")) return null;
+
+    return sanitizeRoomCode(
+        decodeURIComponent(hash.slice("#room=".length))
+    );
+}
+
+
+function encodeData(data) {
+    const json = JSON.stringify(data);
+    return btoa(unescape(encodeURIComponent(json)));
+}
+
+
+function decodeDataFromText(value) {
+    const json = decodeURIComponent(escape(atob(value)));
+    return JSON.parse(json);
+}
+
+
+function createRoomCode() {
+    const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+    let code = "";
+
+    for (let i = 0; i < 6; i++) {
+        code += chars[Math.floor(Math.random() * chars.length)];
+    }
+
+    return code;
 }
 
 
 function sanitizeRoomCode(value) {
     return String(value ?? "")
-        .trim()
         .toUpperCase()
         .replace(/[^A-Z0-9]/g, "")
         .slice(0, 12);
 }
 
 
-function getRoomCodeFromHash() {
-    const hash = location.hash.substring(1);
-    const params = new URLSearchParams(hash);
-    return sanitizeRoomCode(params.get("room"));
-}
+function sanitizeName(value) {
+    const name = String(value ?? "")
+        .trim()
+        .replace(/\s+/g, " ")
+        .slice(0, 24);
 
-
-function getInviteFromHash() {
-    if (!location.hash) return null;
-
-    const hash = location.hash.substring(1);
-    const params = new URLSearchParams(hash);
-    const inviteData = params.get("invite");
-
-    if (!inviteData) return null;
-
-    try {
-        return decodeData(inviteData);
-    }
-    catch (error) {
-        console.error("Invalid invitation:", error);
-        return null;
-    }
-}
-
-
-function createInviteLink(data) {
-    const encoded = encodeData({
-        type: "invite",
-        version: 1,
-        roomCode: data.roomCode,
-        connectionId: data.connectionId,
-        offer: data.offer
-    });
-
-    return `${location.origin}${location.pathname}#invite=${encoded}`;
-}
-
-
-function createAnswerLink(data) {
-    const encoded = encodeData({
-        type: "answer",
-        version: 1,
-        roomCode: data.roomCode,
-        connectionId: data.connectionId,
-        answer: data.answer
-    });
-
-    return `${location.origin}${location.pathname}#answer=${encoded}`;
-}
-
-
-function decodeDataFromText(text) {
-    const value = text.trim();
-    if (!value) throw new Error("Пустые данные.");
-
-    if (value.includes("#answer=")) {
-        const url = new URL(value);
-        const encoded = url.hash.substring(1);
-        const params = new URLSearchParams(encoded);
-        return decodeData(params.get("answer"));
-    }
-
-    return decodeData(value);
-}
-
-
-function encodeData(value) {
-    const json = JSON.stringify(value);
-    const bytes = new TextEncoder().encode(json);
-    let binary = "";
-
-    for (const byte of bytes) {
-        binary += String.fromCharCode(byte);
-    }
-
-    return btoa(binary)
-        .replace(/\+/g, "-")
-        .replace(/\//g, "_")
-        .replace(/=+$/g, "");
-}
-
-
-function decodeData(value) {
-    if (!value) {
-        throw new Error("Нет данных.");
-    }
-
-    const base64 = value
-        .replace(/-/g, "+")
-        .replace(/_/g, "/");
-
-    const padded = base64 + "=".repeat((4 - base64.length % 4) % 4);
-    const binary = atob(padded);
-    const bytes = Uint8Array.from(binary, char => char.charCodeAt(0));
-
-    return JSON.parse(new TextDecoder().decode(bytes));
-}
-
-
-function loadPlayerName() {
-    try {
-        return sanitizeName(localStorage.getItem("site-game-player-name"));
-    }
-    catch {
-        return "Player";
-    }
+    return name || "Player";
 }
 
 
@@ -863,14 +790,16 @@ function savePlayerName(name) {
         localStorage.setItem("site-game-player-name", name);
     }
     catch {
-        // Storage may be unavailable in private/restricted contexts.
+        // Ignore storage errors.
     }
 }
 
 
-function sanitizeName(name) {
-    return String(name ?? "")
-        .trim()
-        .replace(/\s+/g, " ")
-        .slice(0, 24) || "Player";
+function loadPlayerName() {
+    try {
+        return localStorage.getItem("site-game-player-name") || "";
+    }
+    catch {
+        return "";
+    }
 }
