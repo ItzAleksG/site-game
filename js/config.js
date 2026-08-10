@@ -1,4 +1,4 @@
-export const SIGNALING_URL = "https://site-game-signaling.itzaleksg.workers.dev";
+export const SIGNALING_URL = "";
 
 /*
  * После деплоя Cloudflare Worker укажи здесь его WebSocket endpoint:
