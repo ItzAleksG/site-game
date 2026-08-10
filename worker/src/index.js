@@ -2,6 +2,7 @@ import { DurableObject } from "cloudflare:workers";
 
 const MAX_PEERS = 8;
 const ROOM_CODE_PATTERN = /^[A-Z0-9]{6,12}$/;
+const HOST_STATE_KEY = "hostOnline";
 
 export default {
     async fetch(request, env) {
@@ -35,8 +36,6 @@ export default {
         const id = env.ROOMS.idFromName(room);
         const stub = env.ROOMS.get(id);
 
-        // Forward the original WebSocket request unchanged so the
-        // Durable Object receives the WebSocket upgrade correctly.
         return stub.fetch(request);
     }
 };
@@ -68,11 +67,9 @@ export class RoomSignaling extends DurableObject {
             return new Response("Invalid role.", { status: 400 });
         }
 
-        // A room only exists while its HOST is connected. idFromName(room)
-        // creates a Durable Object for any arbitrary name, so existence must
-        // be checked here instead of treating every syntactically valid code
-        // as an existing room.
-        if (role === "client" && !this.hostSocket) {
+        const hostOnline = await this.ctx.storage.get(HOST_STATE_KEY);
+
+        if (role === "client" && !hostOnline) {
             return new Response("Room not found or HOST is offline.", {
                 status: 404,
                 headers: {
@@ -81,7 +78,7 @@ export class RoomSignaling extends DurableObject {
             });
         }
 
-        if (role === "host" && this.hostSocket) {
+        if (role === "host" && hostOnline) {
             return new Response("Room already has a host.", { status: 409 });
         }
 
@@ -110,6 +107,7 @@ export class RoomSignaling extends DurableObject {
 
         if (role === "host") {
             this.hostSocket = server;
+            await this.ctx.storage.put(HOST_STATE_KEY, true);
         }
 
         server.addEventListener("message", event => {
@@ -124,14 +122,27 @@ export class RoomSignaling extends DurableObject {
             this.removeSocket(peerId);
         });
 
-        server.send(JSON.stringify({
+        this.send(server, {
             type: "connected",
             room,
             peerId,
             role
-        }));
+        });
 
-        if (role === "client") {
+        if (role === "host") {
+            this.send(server, {
+                type: "room_ready",
+                room,
+                role: "host"
+            });
+        }
+        else {
+            this.send(server, {
+                type: "room_ready",
+                room,
+                role: "client"
+            });
+
             this.sendToHost({
                 type: "peer_joined",
                 peerId
@@ -178,7 +189,7 @@ export class RoomSignaling extends DurableObject {
         if (!target) {
             this.send(sender.socket, {
                 type: "signal_error",
-                message: "Target peer is not connected.",
+                message: `Target peer is not connected: ${targetId}`,
                 target: targetId
             });
             return;
@@ -193,21 +204,24 @@ export class RoomSignaling extends DurableObject {
 
     sendToHost(message) {
         if (!this.hostSocket) {
-            return;
+            return false;
         }
 
-        this.send(this.hostSocket, message);
+        return this.send(this.hostSocket, message);
     }
 
     send(socket, message) {
         try {
             if (socket.readyState === WebSocket.OPEN) {
                 socket.send(JSON.stringify(message));
+                return true;
             }
         }
         catch {
             // Socket may have closed between the state check and send.
         }
+
+        return false;
     }
 
     removeSocket(peerId) {
@@ -221,6 +235,7 @@ export class RoomSignaling extends DurableObject {
 
         if (info.socket === this.hostSocket) {
             this.hostSocket = null;
+            this.ctx.storage.delete(HOST_STATE_KEY).catch(() => {});
 
             for (const peer of this.sockets.values()) {
                 this.send(peer.socket, {
