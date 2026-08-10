@@ -1,9 +1,1 @@
-export const SIGNALING_URL = "";
-
-/*
- * После деплоя Cloudflare Worker укажи здесь его WebSocket endpoint:
- *
- * wss://<your-worker>.<your-subdomain>.workers.dev/ws
- *
- * Пока строка пустая, старый ручной WebRTC режим остаётся доступным.
- */
+export const SIGNALING_URL = "wss://site-game-signaling.itzaleksg.workers.dev/ws";
