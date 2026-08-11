@@ -9,6 +9,8 @@ const RTC_CONFIG = {
     ]
 };
 
+const JOIN_TIMEOUT_MS = 20000;
+
 
 export class HostNetwork {
     constructor(gameServer, { iceServers = RTC_CONFIG.iceServers } = {}) {
@@ -150,7 +152,6 @@ export class HostNetwork {
 
             if (connectionId) {
                 this.removeConnection(connectionId, true);
-                this.peerConnections.delete(message.peerId);
             }
 
             return;
@@ -168,18 +169,49 @@ export class HostNetwork {
     }
 
     async createInviteForPeer(peerId) {
+        const normalizedPeerId = String(peerId ?? "").trim();
+        if (!normalizedPeerId) {
+            throw new Error("Signaling peer ID is missing.");
+        }
+
+        if (this.peerConnections.has(normalizedPeerId)) {
+            return null;
+        }
+
+        if (this.gameServer.status !== "waiting") {
+            this.sendSignal(normalizedPeerId, {
+                type: "room_error",
+                message: "Game has already started."
+            });
+            return null;
+        }
+
+        if (this.gameServer.isFull()) {
+            this.sendSignal(normalizedPeerId, {
+                type: "room_error",
+                message: "Room is full."
+            });
+            return null;
+        }
+
         const invite = await this.createInvite();
+        const connection = this.connections.get(invite.connectionId);
 
-        this.peerConnections.set(peerId, invite.connectionId);
+        if (!connection) {
+            throw new Error("WebRTC connection disappeared while creating offer.");
+        }
 
-        this.sendSignal(peerId, {
+        connection.peerId = normalizedPeerId;
+        this.peerConnections.set(normalizedPeerId, invite.connectionId);
+
+        this.sendSignal(normalizedPeerId, {
             type: "offer",
             connectionId: invite.connectionId,
             offer: invite.offer
         });
 
         this.emit("inviteCreated", {
-            peerId,
+            peerId: normalizedPeerId,
             ...invite
         });
 
@@ -216,11 +248,22 @@ export class HostNetwork {
             pc,
             channel,
             playerId: null,
-            closed: false
+            peerId: null,
+            closed: false,
+            joinTimer: null
         };
 
         this.connections.set(connectionId, connection);
         this.setupConnection(connection);
+        connection.joinTimer = setTimeout(() => {
+            if (!connection.closed && !connection.playerId) {
+                this.emit("connectionTimeout", {
+                    connectionId,
+                    peerId: connection.peerId
+                });
+                this.removeConnection(connectionId, false);
+            }
+        }, JOIN_TIMEOUT_MS);
 
         const offer = await pc.createOffer();
         await pc.setLocalDescription(offer);
@@ -258,7 +301,8 @@ export class HostNetwork {
         );
 
         this.emit("answerAccepted", {
-            connectionId: connection.id
+            connectionId: connection.id,
+            peerId: connection.peerId
         });
 
         return true;
@@ -272,6 +316,7 @@ export class HostNetwork {
 
             this.emit("connectionStateChange", {
                 connectionId: connection.id,
+                peerId: connection.peerId,
                 state
             });
 
@@ -285,20 +330,12 @@ export class HostNetwork {
 
             this.emit("iceConnectionStateChange", {
                 connectionId: connection.id,
+                peerId: connection.peerId,
                 state
             });
 
-            if (state === "failed") {
+            if (state === "failed" || state === "closed") {
                 this.removeConnection(connection.id, true);
-            }
-        };
-
-        pc.onicecandidate = event => {
-            if (event.candidate) {
-                this.emit("iceCandidate", {
-                    connectionId: connection.id,
-                    candidate: event.candidate
-                });
             }
         };
 
@@ -306,7 +343,8 @@ export class HostNetwork {
 
         channel.onopen = () => {
             this.emit("playerConnection", {
-                connectionId: connection.id
+                connectionId: connection.id,
+                peerId: connection.peerId
             });
         };
 
@@ -322,6 +360,7 @@ export class HostNetwork {
             console.error("Host DataChannel error:", error);
             this.emit("error", {
                 connectionId: connection.id,
+                peerId: connection.peerId,
                 error
             });
         };
@@ -346,9 +385,15 @@ export class HostNetwork {
         connection.closed = true;
         this.connections.delete(connectionId);
 
-        for (const [peerId, id] of this.peerConnections) {
-            if (id === connectionId) {
-                this.peerConnections.delete(peerId);
+        if (connection.joinTimer) {
+            clearTimeout(connection.joinTimer);
+            connection.joinTimer = null;
+        }
+
+        if (connection.peerId) {
+            const mappedId = this.peerConnections.get(connection.peerId);
+            if (mappedId === connectionId) {
+                this.peerConnections.delete(connection.peerId);
             }
         }
 
@@ -361,6 +406,7 @@ export class HostNetwork {
 
         this.emit("connectionRemoved", {
             connectionId,
+            peerId: connection.peerId,
             playerId: connection.playerId
         });
     }
@@ -392,8 +438,6 @@ function buildSignalingUrl(value, roomCode, role) {
         throw new Error("Signaling URL is not configured.");
     }
 
-    // Be tolerant of an accidentally malformed value such as
-    // wss:///example.workers.dev/ws.
     raw = raw.replace(/^wss:\/+(?=[^/])/i, "wss://");
     raw = raw.replace(/^ws:\/+(?=[^/])/i, "ws://");
     raw = raw.replace(/^https:\/+(?=[^/])/i, "https://");
