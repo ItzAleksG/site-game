@@ -166,6 +166,8 @@ export class GameServer {
     receive(connection, raw) {
         if (!connection) return;
 
+        connection.lastSeenAt = Date.now();
+
         const message = parseMessage(raw);
 
         if (!message) {
@@ -241,6 +243,7 @@ export class GameServer {
 
         player.ready = false;
         connection.playerId = playerId;
+        connection.lastSeenAt = Date.now();
         this.connections.set(playerId, connection);
 
         this.send(
