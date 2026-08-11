@@ -13,6 +13,11 @@ const RTC_CONFIG = {
     ]
 };
 
+const PING_INTERVAL_MS = 5000;
+const RECONNECT_BASE_MS = 1000;
+const RECONNECT_MAX_MS = 10000;
+const MAX_RECONNECT_ATTEMPTS = 5;
+
 
 export class ClientNetwork {
     constructor({ iceServers = RTC_CONFIG.iceServers } = {}) {
@@ -20,10 +25,16 @@ export class ClientNetwork {
         this.pc = null;
         this.channel = null;
         this.playerId = null;
+        this.playerName = "Player";
         this.handlers = new Map();
         this.signalingSocket = null;
+        this.signalingUrl = null;
         this.signalingRoom = null;
         this.offerTimeoutTimer = null;
+        this.pingTimer = null;
+        this.reconnectTimer = null;
+        this.reconnectAttempts = 0;
+        this.shouldReconnect = false;
         this.roomReady = false;
         this.activeConnectionId = null;
         this.joinSent = false;
@@ -71,17 +82,28 @@ export class ClientNetwork {
             throw new Error("Signaling URL is not configured.");
         }
 
+        this.clearReconnectTimer();
         this.closeSignaling();
         this.roomReady = false;
         this.activeConnectionId = null;
         this.joinSent = false;
+        this.signalingUrl = String(url).trim();
         this.signalingRoom = String(roomCode ?? "").trim().toUpperCase();
+        this.shouldReconnect = true;
 
         if (!this.signalingRoom) {
             throw new Error("Room code is required for signaling.");
         }
 
-        const endpoint = buildSignalingUrl(url, this.signalingRoom, "client");
+        return this.openSignalingSocket();
+    }
+
+    async openSignalingSocket() {
+        const endpoint = buildSignalingUrl(
+            this.signalingUrl,
+            this.signalingRoom,
+            "client"
+        );
         const socket = new WebSocket(endpoint);
         this.signalingSocket = socket;
 
@@ -96,16 +118,14 @@ export class ClientNetwork {
                 this.signalingSocket = null;
             }
 
-            if (!this.roomReady && event.code !== 1000) {
-                this.emit("roomNotFound", new Error(
-                    "Комната недоступна или HOST отключён."
-                ));
-            }
-
             this.emit("signalingDisconnected", {
                 code: event.code,
                 reason: event.reason
             });
+
+            if (this.shouldReconnect && !this.roomReady) {
+                this.scheduleReconnect();
+            }
         });
 
         socket.addEventListener("error", error => {
@@ -122,6 +142,7 @@ export class ClientNetwork {
             };
 
             socket.addEventListener("open", () => {
+                this.reconnectAttempts = 0;
                 this.emit("signalingConnected", {
                     roomCode: this.signalingRoom,
                     endpoint
@@ -196,6 +217,7 @@ export class ClientNetwork {
                 .catch(error => {
                     console.error("Failed to create automatic WebRTC answer:", error);
                     this.emit("error", error);
+                    this.scheduleReconnect();
                 });
             return;
         }
@@ -203,6 +225,7 @@ export class ClientNetwork {
         if (message.type === "room_error") {
             this.clearOfferTimeout();
             this.roomReady = false;
+            this.shouldReconnect = false;
             this.emit("roomNotFound", new Error(
                 message.message || "Комната недоступна."
             ));
@@ -220,6 +243,7 @@ export class ClientNetwork {
             this.clearOfferTimeout();
             this.roomReady = false;
             this.closePeerConnection();
+            this.shouldReconnect = false;
             this.emit("disconnected");
         }
     }
@@ -258,11 +282,27 @@ export class ClientNetwork {
             const state = connection.connectionState;
             this.emit("connectionStateChange", state);
 
+            if (state === "connected") {
+                this.reconnectAttempts = 0;
+            }
+
             if (state === "failed" || state === "closed") {
                 if (this.pc === connection) {
                     this.pc = null;
                 }
+
                 this.emit("disconnected");
+                this.scheduleReconnect();
+            }
+        };
+
+        connection.oniceconnectionstatechange = () => {
+            const state = connection.iceConnectionState;
+            this.emit("iceConnectionStateChange", state);
+
+            if (state === "failed" || state === "closed") {
+                this.emit("disconnected");
+                this.scheduleReconnect();
             }
         };
 
@@ -308,6 +348,7 @@ export class ClientNetwork {
         this.channel.binaryType = "arraybuffer";
 
         this.channel.onopen = () => {
+            this.startPingLoop();
             this.emit("connected");
         };
 
@@ -316,7 +357,9 @@ export class ClientNetwork {
         };
 
         this.channel.onclose = () => {
+            this.stopPingLoop();
             this.emit("disconnected");
+            this.scheduleReconnect();
         };
 
         this.channel.onerror = error => {
@@ -357,11 +400,13 @@ export class ClientNetwork {
         }
     }
 
-    join(name) {
+    join(name = this.playerName) {
+        this.playerName = sanitizeName(name);
+
         if (this.joinSent) return true;
 
         const sent = this.sendMessage(MESSAGE.JOIN, {
-            name: sanitizeName(name)
+            name: this.playerName
         });
 
         if (sent) {
@@ -391,6 +436,24 @@ export class ClientNetwork {
         });
     }
 
+    startPingLoop() {
+        this.stopPingLoop();
+        this.ping();
+
+        this.pingTimer = setInterval(() => {
+            if (!this.ping()) {
+                this.stopPingLoop();
+            }
+        }, PING_INTERVAL_MS);
+    }
+
+    stopPingLoop() {
+        if (!this.pingTimer) return;
+
+        clearInterval(this.pingTimer);
+        this.pingTimer = null;
+    }
+
     scheduleOfferTimeout(timeout = 15000) {
         this.clearOfferTimeout();
 
@@ -410,32 +473,82 @@ export class ClientNetwork {
         this.offerTimeoutTimer = null;
     }
 
-    closePeerConnection() {
-        if (this.channel) {
-            try { this.channel.close(); } catch {}
+    scheduleReconnect() {
+        if (!this.shouldReconnect) return;
+        if (!this.signalingRoom || !this.signalingUrl) return;
+        if (this.reconnectTimer) return;
+        if (this.signalingSocket) return;
+
+        if (this.reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
+            this.emit(
+                "reconnectFailed",
+                new Error("Не удалось восстановить подключение к комнате.")
+            );
+            return;
         }
 
-        if (this.pc) {
-            try { this.pc.close(); } catch {}
-        }
+        this.reconnectAttempts++;
+        const delay = Math.min(
+            RECONNECT_BASE_MS * 2 ** (this.reconnectAttempts - 1),
+            RECONNECT_MAX_MS
+        );
+
+        this.emit("reconnecting", {
+            attempt: this.reconnectAttempts,
+            delay
+        });
+
+        this.reconnectTimer = setTimeout(async () => {
+            this.reconnectTimer = null;
+
+            if (!this.shouldReconnect) return;
+
+            try {
+                await this.openSignalingSocket();
+            }
+            catch (error) {
+                this.emit("reconnectError", error);
+                this.scheduleReconnect();
+            }
+        }, delay);
+    }
+
+    clearReconnectTimer() {
+        if (!this.reconnectTimer) return;
+
+        clearTimeout(this.reconnectTimer);
+        this.reconnectTimer = null;
+    }
+
+    closePeerConnection() {
+        this.stopPingLoop();
+
+        const channel = this.channel;
+        const pc = this.pc;
 
         this.channel = null;
         this.pc = null;
         this.activeConnectionId = null;
         this.joinSent = false;
+
+        try { channel?.close(); } catch {}
+        try { pc?.close(); } catch {}
     }
 
     closeSignaling() {
         this.clearOfferTimeout();
         this.roomReady = false;
 
-        if (!this.signalingSocket) return;
-
-        try { this.signalingSocket.close(); } catch {}
+        const socket = this.signalingSocket;
         this.signalingSocket = null;
+
+        try { socket?.close(); } catch {}
     }
 
     close() {
+        this.shouldReconnect = false;
+        this.clearReconnectTimer();
+        this.clearOfferTimeout();
         this.closeSignaling();
         this.closePeerConnection();
         this.playerId = null;
