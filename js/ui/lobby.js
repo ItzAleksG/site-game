@@ -23,7 +23,6 @@ export class LobbyUI {
             this.elements.hostLobby.classList.remove("hidden");
         }
 
-        /* HOST видит лобби и игровое поле одновременно. */
         if (this.elements.game) {
             this.elements.game.classList.remove("hidden");
         }
@@ -32,14 +31,6 @@ export class LobbyUI {
 
     showClient() {
         this.showView(this.elements.clientLobby);
-
-        /*
-         * Ник приглашённого игрока не должен наследоваться
-         * из localStorage хоста. Каждый клиент выбирает его сам.
-         */
-        if (this.elements.clientPlayerName && !this.elements.clientPlayerName.value) {
-            this.elements.clientPlayerName.value = "";
-        }
     }
 
 
@@ -128,21 +119,27 @@ export class LobbyUI {
     }
 
 
-    setPlayerCount(count, maxPlayers = null) {
+    setPlayerCount(count, maxPlayers = null, target = "host") {
+        const element = target === "client"
+            ? this.elements.clientPlayerCount
+            : this.elements.playerCount;
+
+        if (!element) return;
+
         if (maxPlayers === null || maxPlayers === undefined) {
-            this.setText(this.elements.playerCount, String(count));
+            this.setText(element, String(count));
             return;
         }
 
-        this.setText(
-            this.elements.playerCount,
-            `${count}/${maxPlayers}`
-        );
+        this.setText(element, `${count}/${maxPlayers}`);
     }
 
 
-    setPlayers(players = []) {
-        const list = this.elements.playerList;
+    setPlayers(players = [], target = "host") {
+        const list = target === "client"
+            ? this.elements.clientPlayerList
+            : this.elements.playerList;
+
         if (!list) return;
 
         list.innerHTML = "";
