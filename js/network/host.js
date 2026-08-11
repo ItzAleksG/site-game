@@ -1,6 +1,3 @@
-import { MESSAGE } from "./protocol.js";
-
-
 const RTC_CONFIG = {
     iceServers: [
         {
@@ -10,6 +7,8 @@ const RTC_CONFIG = {
 };
 
 const JOIN_TIMEOUT_MS = 20000;
+const HEARTBEAT_INTERVAL_MS = 5000;
+const HEARTBEAT_TIMEOUT_MS = 15000;
 
 
 export class HostNetwork {
@@ -25,6 +24,10 @@ export class HostNetwork {
         this.handlers = new Map();
         this.signalingSocket = null;
         this.signalingRoom = null;
+        this.heartbeatTimer = setInterval(
+            () => this.checkHeartbeats(),
+            HEARTBEAT_INTERVAL_MS
+        );
     }
 
     on(event, handler) {
@@ -250,7 +253,9 @@ export class HostNetwork {
             playerId: null,
             peerId: null,
             closed: false,
-            joinTimer: null
+            joinTimer: null,
+            lastState: "connecting",
+            lastSeenAt: Date.now()
         };
 
         this.connections.set(connectionId, connection);
@@ -313,10 +318,12 @@ export class HostNetwork {
 
         pc.onconnectionstatechange = () => {
             const state = pc.connectionState;
+            connection.lastState = state;
 
             this.emit("connectionStateChange", {
                 connectionId: connection.id,
                 peerId: connection.peerId,
+                playerId: connection.playerId,
                 state
             });
 
@@ -331,6 +338,7 @@ export class HostNetwork {
             this.emit("iceConnectionStateChange", {
                 connectionId: connection.id,
                 peerId: connection.peerId,
+                playerId: connection.playerId,
                 state
             });
 
@@ -342,13 +350,18 @@ export class HostNetwork {
         channel.binaryType = "arraybuffer";
 
         channel.onopen = () => {
+            connection.lastSeenAt = Date.now();
+            connection.lastState = "connected";
+
             this.emit("playerConnection", {
                 connectionId: connection.id,
-                peerId: connection.peerId
+                peerId: connection.peerId,
+                playerId: connection.playerId
             });
         };
 
         channel.onmessage = event => {
+            connection.lastSeenAt = Date.now();
             this.gameServer.receive(connection, event.data);
         };
 
@@ -364,6 +377,23 @@ export class HostNetwork {
                 error
             });
         };
+    }
+
+    checkHeartbeats() {
+        const now = Date.now();
+
+        for (const connection of [...this.connections.values()]) {
+            if (connection.closed || !connection.playerId) continue;
+
+            if (now - connection.lastSeenAt > HEARTBEAT_TIMEOUT_MS) {
+                this.emit("heartbeatTimeout", {
+                    connectionId: connection.id,
+                    peerId: connection.peerId,
+                    playerId: connection.playerId
+                });
+                this.removeConnection(connection.id, true);
+            }
+        }
     }
 
     findConnection(connectionId) {
@@ -397,7 +427,9 @@ export class HostNetwork {
             }
         }
 
-        if (notifyServer && connection.playerId) {
+        const playerId = connection.playerId;
+
+        if (notifyServer && playerId) {
             this.gameServer.disconnect(connection);
         }
 
@@ -407,7 +439,7 @@ export class HostNetwork {
         this.emit("connectionRemoved", {
             connectionId,
             peerId: connection.peerId,
-            playerId: connection.playerId
+            playerId
         });
     }
 
@@ -419,6 +451,11 @@ export class HostNetwork {
     }
 
     close() {
+        if (this.heartbeatTimer) {
+            clearInterval(this.heartbeatTimer);
+            this.heartbeatTimer = null;
+        }
+
         this.closeSignaling();
 
         for (const connection of [...this.connections.values()]) {
