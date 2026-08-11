@@ -32,6 +32,16 @@
                 spellcheck="false"
             >
 
+            <label for="joinRoomCode">Код комнаты</label>
+            <input
+                id="joinRoomCode"
+                type="text"
+                maxlength="12"
+                autocomplete="off"
+                placeholder="Для подключения к комнате"
+                spellcheck="false"
+            >
+
             <div class="buttons">
                 <button id="hostButton" type="button">
                     Создать комнату
@@ -42,18 +52,8 @@
                 </button>
             </div>
 
-            <label for="joinRoomCode">Код комнаты</label>
-            <input
-                id="joinRoomCode"
-                type="text"
-                maxlength="12"
-                autocomplete="off"
-                placeholder="Например: A7K2P9"
-                spellcheck="false"
-            >
-
             <p class="muted">
-                Чтобы войти в комнату, введи её код и нажми «Подключиться».
+                Ник используется для комнаты и сохраняется на этом устройстве.
             </p>
         </div>
 
@@ -142,7 +142,7 @@
 
 </main>
 
-<script type="module" src="./js/main.js"></script>
+<script type="module" src="./js/main.js?v=20260811-1"></script>
 
 </body>
 </html>
