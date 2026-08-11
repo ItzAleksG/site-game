@@ -22,14 +22,14 @@
         <div id="lobbyMenu">
             <h2>Лобби</h2>
 
-            <label for="playerName">Имя игрока</label>
+            <label for="playerName">Твой ник</label>
             <input
                 id="playerName"
                 type="text"
                 maxlength="24"
                 autocomplete="nickname"
-                placeholder="Имя игрока"
-                value="Player"
+                placeholder="Введи ник"
+                spellcheck="false"
             >
 
             <div class="buttons">
@@ -53,7 +53,7 @@
             >
 
             <p class="muted">
-                Введи код комнаты HOST и нажми «Подключиться».
+                Чтобы войти в комнату, введи её код и нажми «Подключиться».
             </p>
         </div>
 
@@ -84,53 +84,27 @@
             <button id="startGameButton" type="button" disabled>
                 Запустить игру
             </button>
-
-            <details>
-                <summary>Ручной WebRTC режим</summary>
-
-                <h3>Приглашение игрока</h3>
-                <textarea
-                    id="hostOffer"
-                    readonly
-                    spellcheck="false"
-                    placeholder="Здесь появится invitation-ссылка"
-                ></textarea>
-
-                <h3>Answer игрока</h3>
-                <textarea
-                    id="hostAnswer"
-                    spellcheck="false"
-                    placeholder="Вставь сюда Answer-ссылку игрока"
-                ></textarea>
-
-                <button id="acceptAnswerButton" type="button">
-                    Подключить игрока вручную
-                </button>
-            </details>
         </div>
 
         <div id="clientLobby" class="hidden">
-            <h2>Подключение</h2>
+            <h2>Комната</h2>
 
             <div class="roomCode">
                 <span>Код комнаты</span>
                 <strong id="clientRoomCode">-</strong>
             </div>
 
-            <label for="clientPlayerName">Твой ник</label>
-            <input
-                id="clientPlayerName"
-                type="text"
-                maxlength="24"
-                autocomplete="nickname"
-                placeholder="Имя игрока"
-                value="Player"
-            >
-
             <div class="status">
                 <strong>Статус</strong>
                 <p id="clientStatus">Подготовка...</p>
             </div>
+
+            <div class="players-header">
+                <h3>Игроки</h3>
+                <span id="clientPlayerCount">0/8</span>
+            </div>
+
+            <div id="clientPlayers"></div>
 
             <button id="createAnswerButton" type="button">
                 Подключиться к комнате
@@ -139,16 +113,6 @@
             <button id="clientReadyButton" type="button" disabled>
                 Готов
             </button>
-
-            <details>
-                <summary>Ручной Answer</summary>
-                <textarea
-                    id="clientAnswer"
-                    readonly
-                    spellcheck="false"
-                    placeholder="Здесь появится Answer-ссылка"
-                ></textarea>
-            </details>
         </div>
 
     </section>
