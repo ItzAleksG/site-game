@@ -25,6 +25,8 @@ export class ClientNetwork {
         this.signalingRoom = null;
         this.offerTimeoutTimer = null;
         this.roomReady = false;
+        this.activeConnectionId = null;
+        this.joinSent = false;
     }
 
     on(event, handler) {
@@ -71,6 +73,8 @@ export class ClientNetwork {
 
         this.closeSignaling();
         this.roomReady = false;
+        this.activeConnectionId = null;
+        this.joinSent = false;
         this.signalingRoom = String(roomCode ?? "").trim().toUpperCase();
 
         if (!this.signalingRoom) {
@@ -163,13 +167,25 @@ export class ClientNetwork {
         }
 
         if (message.type === "signal" && message.data?.type === "offer") {
+            const connectionId = String(message.data.connectionId ?? "");
+
+            if (!connectionId) {
+                this.emit("error", new Error("HOST sent an offer without a connection ID."));
+                return;
+            }
+
+            if (this.activeConnectionId === connectionId && this.pc) {
+                return;
+            }
+
             this.clearOfferTimeout();
+            this.activeConnectionId = connectionId;
 
             this.connect(message.data.offer)
                 .then(answer => {
                     const sent = this.sendSignal("host", {
                         type: "answer",
-                        connectionId: message.data.connectionId,
+                        connectionId,
                         answer
                     });
 
@@ -184,6 +200,15 @@ export class ClientNetwork {
             return;
         }
 
+        if (message.type === "room_error") {
+            this.clearOfferTimeout();
+            this.roomReady = false;
+            this.emit("roomNotFound", new Error(
+                message.message || "Комната недоступна."
+            ));
+            return;
+        }
+
         if (message.type === "signal_error") {
             this.emit("error", new Error(
                 message.message || "Signaling server could not deliver the message."
@@ -194,6 +219,7 @@ export class ClientNetwork {
         if (message.type === "host_left") {
             this.clearOfferTimeout();
             this.roomReady = false;
+            this.closePeerConnection();
             this.emit("disconnected");
         }
     }
@@ -221,26 +247,32 @@ export class ClientNetwork {
             throw new Error("Invalid WebRTC offer.");
         }
 
+        this.joinSent = false;
         this.pc = new RTCPeerConnection({
             iceServers: this.iceServers
         });
 
-        this.pc.onconnectionstatechange = () => {
-            const state = this.pc?.connectionState;
+        const connection = this.pc;
+
+        connection.onconnectionstatechange = () => {
+            const state = connection.connectionState;
             this.emit("connectionStateChange", state);
 
             if (state === "failed" || state === "closed") {
+                if (this.pc === connection) {
+                    this.pc = null;
+                }
                 this.emit("disconnected");
             }
         };
 
-        this.pc.onicecandidate = event => {
+        connection.onicecandidate = event => {
             if (event.candidate) {
                 this.emit("iceCandidate", event.candidate);
             }
         };
 
-        this.pc.ondatachannel = event => {
+        connection.ondatachannel = event => {
             if (this.channel) {
                 try { event.channel.close(); } catch {}
                 return;
@@ -250,15 +282,15 @@ export class ClientNetwork {
             this.setupChannel();
         };
 
-        await this.pc.setRemoteDescription(
+        await connection.setRemoteDescription(
             new RTCSessionDescription(offer)
         );
 
-        const answer = await this.pc.createAnswer();
-        await this.pc.setLocalDescription(answer);
-        await waitForIceGatheringComplete(this.pc);
+        const answer = await connection.createAnswer();
+        await connection.setLocalDescription(answer);
+        await waitForIceGatheringComplete(connection);
 
-        const description = this.pc.localDescription;
+        const description = connection.localDescription;
 
         if (!description) {
             throw new Error("Failed to create WebRTC answer.");
@@ -326,9 +358,17 @@ export class ClientNetwork {
     }
 
     join(name) {
-        return this.sendMessage(MESSAGE.JOIN, {
+        if (this.joinSent) return true;
+
+        const sent = this.sendMessage(MESSAGE.JOIN, {
             name: sanitizeName(name)
         });
+
+        if (sent) {
+            this.joinSent = true;
+        }
+
+        return sent;
     }
 
     setReady(ready = true) {
@@ -381,7 +421,8 @@ export class ClientNetwork {
 
         this.channel = null;
         this.pc = null;
-        this.playerId = null;
+        this.activeConnectionId = null;
+        this.joinSent = false;
     }
 
     closeSignaling() {
@@ -397,6 +438,7 @@ export class ClientNetwork {
     close() {
         this.closeSignaling();
         this.closePeerConnection();
+        this.playerId = null;
     }
 }
 
