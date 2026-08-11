@@ -217,6 +217,7 @@ export class ClientNetwork {
                 .catch(error => {
                     console.error("Failed to create automatic WebRTC answer:", error);
                     this.emit("error", error);
+                    this.closeSignaling();
                     this.scheduleReconnect();
                 });
             return;
@@ -292,6 +293,7 @@ export class ClientNetwork {
                 }
 
                 this.emit("disconnected");
+                this.closeSignaling();
                 this.scheduleReconnect();
             }
         };
@@ -302,6 +304,7 @@ export class ClientNetwork {
 
             if (state === "failed" || state === "closed") {
                 this.emit("disconnected");
+                this.closeSignaling();
                 this.scheduleReconnect();
             }
         };
@@ -359,6 +362,7 @@ export class ClientNetwork {
         this.channel.onclose = () => {
             this.stopPingLoop();
             this.emit("disconnected");
+            this.closeSignaling();
             this.scheduleReconnect();
         };
 
@@ -477,7 +481,10 @@ export class ClientNetwork {
         if (!this.shouldReconnect) return;
         if (!this.signalingRoom || !this.signalingUrl) return;
         if (this.reconnectTimer) return;
-        if (this.signalingSocket) return;
+
+        if (this.signalingSocket) {
+            this.closeSignaling();
+        }
 
         if (this.reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
             this.emit(
