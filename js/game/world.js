@@ -3,22 +3,30 @@ export class World {
         this.width = options.width ?? 700;
         this.height = options.height ?? 450;
 
-        this.playerSpeed = options.playerSpeed ?? 10;
+        this.playerSpeed =
+            options.playerSpeed ?? 10;
 
         this.players = new Map();
 
         this.tick = 0;
     }
 
+
     addPlayer({
         id,
         name,
         x = 100,
         y = 100,
-        hp = 100
+        hp = 100,
+
+        ready = false,
+        connected = true,
+        sessionId = null
     }) {
         if (!id) {
-            throw new Error("Player id is required.");
+            throw new Error(
+                "Player id is required."
+            );
         }
 
         if (this.players.has(id)) {
@@ -29,91 +37,171 @@ export class World {
 
         const player = {
             id,
-            name: sanitizePlayerName(name),
-            x: clamp(Number(x) || 0, 0, this.width),
-            y: clamp(Number(y) || 0, 0, this.height),
-            hp: clamp(Number(hp) || 0, 0, 100)
+
+            name:
+                sanitizePlayerName(name),
+
+            x:
+                clamp(
+                    Number(x) || 0,
+                    0,
+                    this.width
+                ),
+
+            y:
+                clamp(
+                    Number(y) || 0,
+                    0,
+                    this.height
+                ),
+
+            hp:
+                clamp(
+                    Number(hp) || 0,
+                    0,
+                    100
+                ),
+
+            /*
+             * Connection/session state.
+             */
+            ready:
+                Boolean(ready),
+
+            connected:
+                connected !== false,
+
+            sessionId:
+                sessionId
+                    ? String(sessionId)
+                    : null
         };
 
-        this.players.set(id, player);
+        this.players.set(
+            id,
+            player
+        );
 
         return player;
     }
+
 
     removePlayer(id) {
         return this.players.delete(id);
     }
 
+
     hasPlayer(id) {
         return this.players.has(id);
     }
 
+
     getPlayer(id) {
-        return this.players.get(id) ?? null;
+        return (
+            this.players.get(id) ??
+            null
+        );
     }
+
 
     getPlayers() {
-        return [...this.players.values()];
+        return [
+            ...this.players.values()
+        ];
     }
 
+
     movePlayer(id, dx, dy) {
-        const player = this.players.get(id);
+        const player =
+            this.players.get(id);
 
         if (!player) {
             return false;
         }
 
-        const normalizedDx = clamp(
-            Number(dx) || 0,
-            -1,
-            1
-        );
+        const normalizedDx =
+            clamp(
+                Number(dx) || 0,
+                -1,
+                1
+            );
 
-        const normalizedDy = clamp(
-            Number(dy) || 0,
-            -1,
-            1
-        );
+        const normalizedDy =
+            clamp(
+                Number(dy) || 0,
+                -1,
+                1
+            );
 
-        player.x = clamp(
-            player.x + normalizedDx * this.playerSpeed,
-            0,
-            this.width
-        );
+        player.x =
+            clamp(
+                player.x +
+                    normalizedDx *
+                    this.playerSpeed,
 
-        player.y = clamp(
-            player.y + normalizedDy * this.playerSpeed,
-            0,
-            this.height
-        );
+                0,
+                this.width
+            );
+
+        player.y =
+            clamp(
+                player.y +
+                    normalizedDy *
+                    this.playerSpeed,
+
+                0,
+                this.height
+            );
 
         return true;
     }
+
 
     update() {
         this.tick += 1;
     }
 
+
     snapshot() {
         return {
-            tick: this.tick,
+            tick:
+                this.tick,
 
-            width: this.width,
+            width:
+                this.width,
 
-            height: this.height,
+            height:
+                this.height,
 
-            players: this.getPlayers().map(
-                player => ({
-                    id: player.id,
-                    name: player.name,
-                    x: player.x,
-                    y: player.y,
-                    hp: player.hp
-                })
-            )
+            players:
+                this.getPlayers().map(
+                    player => ({
+                        id:
+                            player.id,
+
+                        name:
+                            player.name,
+
+                        x:
+                            player.x,
+
+                        y:
+                            player.y,
+
+                        hp:
+                            player.hp,
+
+                        ready:
+                            player.ready === true,
+
+                        connected:
+                            player.connected !== false
+                    })
+                )
         };
     }
 }
+
 
 function sanitizePlayerName(name) {
     const normalized =
@@ -122,12 +210,23 @@ function sanitizePlayerName(name) {
             .replace(/\s+/g, " ")
             .slice(0, 24);
 
-    return normalized || "Player";
+    return (
+        normalized ||
+        "Player"
+    );
 }
 
-function clamp(value, min, max) {
+
+function clamp(
+    value,
+    min,
+    max
+) {
     return Math.max(
         min,
-        Math.min(max, value)
+        Math.min(
+            max,
+            value
+        )
     );
 }
