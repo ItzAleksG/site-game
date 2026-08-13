@@ -147,23 +147,19 @@ export class LobbyUI {
         for (const player of players) {
             const item = document.createElement("div");
             item.className = "lobby-player";
-            item.dataset.playerId = player.id;
+            item.dataset.playerId = player.id ?? "";
 
             const name = document.createElement("span");
             name.className = "lobby-player-name";
-            name.textContent = player.name;
+            name.textContent = player.name ?? "Player";
 
             const state = document.createElement("span");
             state.className = "lobby-player-state";
-            state.textContent = player.id === "HOST"
-                ? "HOST"
-                : player.ready
-                    ? "Готов"
-                    : "Не готов";
+            state.textContent = getPlayerStateLabel(player);
 
             const id = document.createElement("span");
             id.className = "lobby-player-id";
-            id.textContent = player.id;
+            id.textContent = player.id ?? "-";
 
             item.append(name, state, id);
             list.appendChild(item);
@@ -199,6 +195,21 @@ export class LobbyUI {
         if (!element) return "";
         return element.value ?? "";
     }
+}
+
+
+function getPlayerStateLabel(player) {
+    if (player.id === "HOST") {
+        return "HOST";
+    }
+
+    if (player.connected === false) {
+        return "Отключён";
+    }
+
+    return player.ready === true
+        ? "Готов"
+        : "Не готов";
 }
 
 
