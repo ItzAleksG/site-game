@@ -15,6 +15,9 @@ export const ROOM_STATUS = Object.freeze({
 });
 
 
+const RECONNECT_GRACE_MS = 20000;
+
+
 export class GameServer {
     constructor(options = {}) {
         if (typeof options === "string") {
@@ -33,12 +36,28 @@ export class GameServer {
         );
 
         this.world = new World(options.world || {});
+
+        /*
+         * playerId -> connection
+         *
+         * Здесь находятся только реально подключённые
+         * WebRTC-соединения.
+         */
         this.connections = new Map();
+
+        /*
+         * playerId -> reconnect timer
+         *
+         * Игрок после отключения не удаляется сразу.
+         */
+        this.disconnectTimers = new Map();
+
         this.nextPlayerNumber = 1;
         this.status = ROOM_STATUS.WAITING;
 
         this.onPlayerJoined = null;
         this.onPlayerLeft = null;
+        this.onPlayerReconnected = null;
         this.onPlayerListChanged = null;
         this.onSnapshot = null;
         this.onRoomStateChanged = null;
@@ -47,6 +66,14 @@ export class GameServer {
             id: "HOST",
             name: "Host"
         });
+
+        const host = this.world.getPlayer("HOST");
+
+        if (host) {
+            host.ready = true;
+            host.connected = true;
+            host.sessionId = "HOST";
+        }
     }
 
 
@@ -56,23 +83,32 @@ export class GameServer {
 
     setHostName(name) {
         const host = this.world.getPlayer("HOST");
-        if (!host) return false;
+
+        if (!host) {
+            return false;
+        }
 
         host.name = sanitizeName(name);
         host.ready = true;
+        host.connected = true;
 
         this.notifyPlayerListChanged();
         this.notifySnapshot();
         this.notifyRoomState();
+
         return true;
     }
 
 
     hostInput(message) {
-        if (!message) return false;
+        if (!message) {
+            return false;
+        }
 
         return this.input(
-            { playerId: "HOST" },
+            {
+                playerId: "HOST"
+            },
             message
         );
     }
@@ -103,8 +139,13 @@ export class GameServer {
 
 
     canStart() {
-        if (this.status !== ROOM_STATUS.WAITING) return false;
-        if (this.getPlayerCount() < 2) return false;
+        if (this.status !== ROOM_STATUS.WAITING) {
+            return false;
+        }
+
+        if (this.getPlayerCount() < 2) {
+            return false;
+        }
 
         return this.getPlayers()
             .filter(player => player.id !== "HOST")
@@ -115,34 +156,51 @@ export class GameServer {
     getRoomState() {
         return {
             roomCode: this.roomCode,
+
             status: this.status,
-            playerCount: this.getPlayerCount(),
+
+            playerCount: this.getPlayers()
+                .filter(player => player.connected !== false)
+                .length,
+
             maxPlayers: this.maxPlayers,
+
             canStart: this.canStart(),
+
             players: this.getPlayers().map(player => ({
                 id: player.id,
                 name: player.name,
-                ready: player.ready === true
+                ready: player.ready === true,
+                connected: player.connected !== false
             }))
         };
     }
 
 
     /* ========================================================
-       ROOM LIFECYCLE
+       READY
        ======================================================== */
 
     setPlayerReady(connection, ready = true) {
-        if (!connection?.playerId) return false;
-        if (this.status !== ROOM_STATUS.WAITING) return false;
+        if (!connection?.playerId) {
+            return false;
+        }
+
+        if (this.status !== ROOM_STATUS.WAITING) {
+            return false;
+        }
 
         const player = this.world.getPlayer(connection.playerId);
-        if (!player) return false;
+
+        if (!player) {
+            return false;
+        }
 
         player.ready = Boolean(ready);
 
         this.broadcastRoomState();
         this.notifyPlayerListChanged();
+
         return true;
     }
 
@@ -153,25 +211,33 @@ export class GameServer {
         }
 
         this.status = ROOM_STATUS.PLAYING;
+
         this.broadcastRoomState();
         this.broadcastSnapshot();
+
         return true;
     }
 
 
     /* ========================================================
-       NETWORK INPUT
+       RECEIVE
        ======================================================== */
 
     receive(connection, raw) {
-        if (!connection) return;
+        if (!connection) {
+            return;
+        }
 
         connection.lastSeenAt = Date.now();
 
         const message = parseMessage(raw);
 
         if (!message) {
-            this.sendError(connection, "Invalid message.");
+            this.sendError(
+                connection,
+                "Invalid message."
+            );
+
             return;
         }
 
@@ -185,7 +251,10 @@ export class GameServer {
                 break;
 
             case MESSAGE.PLAYER_READY:
-                this.setPlayerReady(connection, message.ready);
+                this.setPlayerReady(
+                    connection,
+                    message.ready
+                );
                 break;
 
             case MESSAGE.PING:
@@ -208,17 +277,20 @@ export class GameServer {
 
 
     /* ========================================================
-       JOIN
+       JOIN / RECONNECT
        ======================================================== */
 
     join(connection, message) {
-        if (!connection) return;
+        if (!connection) {
+            return;
+        }
 
         if (connection.playerId) {
             this.sendError(
                 connection,
                 "Player is already registered."
             );
+
             return;
         }
 
@@ -227,41 +299,94 @@ export class GameServer {
                 connection,
                 "Game has already started."
             );
+
             return;
         }
 
+        const sessionId = sanitizeSessionId(
+            message.sessionId
+        );
+
+        if (!sessionId) {
+            this.sendError(
+                connection,
+                "Player session is missing."
+            );
+
+            return;
+        }
+
+        /*
+         * Ищем уже существующего игрока
+         * по постоянному sessionId.
+         */
+        const existingPlayer = this.findPlayerBySessionId(
+            sessionId
+        );
+
+        if (existingPlayer) {
+            this.reconnectPlayer(
+                connection,
+                existingPlayer,
+                message
+            );
+
+            return;
+        }
+
+        /*
+         * Это действительно новый игрок.
+         */
         if (this.isFull()) {
-            this.sendError(connection, "Room is full.");
+            this.sendError(
+                connection,
+                "Room is full."
+            );
+
             return;
         }
 
         const playerId = `P-${this.nextPlayerNumber++}`;
+
         const player = this.world.addPlayer({
             id: playerId,
             name: sanitizeName(message.name)
         });
 
         player.ready = false;
+        player.connected = true;
+        player.sessionId = sessionId;
+
         connection.playerId = playerId;
+        connection.sessionId = sessionId;
         connection.lastSeenAt = Date.now();
-        this.connections.set(playerId, connection);
+
+        this.connections.set(
+            playerId,
+            connection
+        );
 
         this.send(
             connection,
             makeMessage(MESSAGE.WELCOME, {
                 roomCode: this.roomCode,
                 playerId,
+                sessionId,
+                resumed: false,
                 snapshot: this.world.snapshot(),
                 roomState: this.getRoomState()
             })
         );
 
         this.broadcast(
-            makeMessage(MESSAGE.PLAYER_JOINED, { player }),
+            makeMessage(MESSAGE.PLAYER_JOINED, {
+                player: serializePlayer(player)
+            }),
             playerId
         );
 
         this.broadcastRoomState();
+
         this.notifyPlayerListChanged();
         this.notifySnapshot();
         this.notifyRoomState();
@@ -269,6 +394,91 @@ export class GameServer {
         if (typeof this.onPlayerJoined === "function") {
             this.onPlayerJoined(player);
         }
+    }
+
+
+    reconnectPlayer(connection, player, message) {
+        const playerId = player.id;
+
+        /*
+         * Если этот игрок ещё подключён,
+         * не разрешаем второе соединение
+         * с той же sessionId.
+         */
+        const currentConnection =
+            this.connections.get(playerId);
+
+        if (
+            currentConnection &&
+            currentConnection !== connection
+        ) {
+            this.sendError(
+                connection,
+                "Player session is already connected."
+            );
+
+            return;
+        }
+
+        this.clearDisconnectTimer(playerId);
+
+        player.connected = true;
+
+        /*
+         * Ник можно обновить при reconnect.
+         */
+        if (message.name) {
+            player.name = sanitizeName(message.name);
+        }
+
+        connection.playerId = playerId;
+        connection.sessionId = player.sessionId;
+        connection.lastSeenAt = Date.now();
+
+        this.connections.set(
+            playerId,
+            connection
+        );
+
+        this.send(
+            connection,
+            makeMessage(MESSAGE.WELCOME, {
+                roomCode: this.roomCode,
+                playerId,
+                sessionId: player.sessionId,
+                resumed: true,
+                snapshot: this.world.snapshot(),
+                roomState: this.getRoomState()
+            })
+        );
+
+        this.broadcastRoomState();
+
+        this.notifyPlayerListChanged();
+        this.notifySnapshot();
+        this.notifyRoomState();
+
+        if (typeof this.onPlayerReconnected === "function") {
+            this.onPlayerReconnected(player);
+        }
+    }
+
+
+    findPlayerBySessionId(sessionId) {
+        if (!sessionId) {
+            return null;
+        }
+
+        for (const player of this.world.getPlayers()) {
+            if (
+                player.id !== "HOST" &&
+                player.sessionId === sessionId
+            ) {
+                return player;
+            }
+        }
+
+        return null;
     }
 
 
@@ -284,6 +494,7 @@ export class GameServer {
                     "Player is not registered."
                 );
             }
+
             return false;
         }
 
@@ -291,7 +502,9 @@ export class GameServer {
             return false;
         }
 
-        if (message.action !== "move") return false;
+        if (message.action !== "move") {
+            return false;
+        }
 
         const moved = this.world.movePlayer(
             connection.playerId,
@@ -299,10 +512,14 @@ export class GameServer {
             message.dy
         );
 
-        if (!moved) return false;
+        if (!moved) {
+            return false;
+        }
 
         this.world.update();
+
         this.broadcastSnapshot();
+
         return true;
     }
 
@@ -312,29 +529,108 @@ export class GameServer {
        ======================================================== */
 
     disconnect(connection) {
-        if (!connection?.playerId) return false;
+        if (!connection?.playerId) {
+            return false;
+        }
 
         const playerId = connection.playerId;
-        connection.playerId = null;
+
+        /*
+         * Если это не тот connection, который сейчас
+         * считается активным — ничего не делаем.
+         */
+        if (
+            this.connections.get(playerId) !== connection
+        ) {
+            return false;
+        }
+
         this.connections.delete(playerId);
 
-        const player = this.world.getPlayer(playerId);
-        this.world.removePlayer(playerId);
+        connection.playerId = null;
 
-        this.broadcast(
-            makeMessage(MESSAGE.PLAYER_LEFT, { playerId })
+        const player = this.world.getPlayer(playerId);
+
+        if (!player) {
+            return false;
+        }
+
+        /*
+         * Игрок остаётся в World на время grace period.
+         */
+        player.connected = false;
+
+        this.scheduleDisconnectRemoval(
+            playerId
         );
 
-        if (typeof this.onPlayerLeft === "function") {
-            this.onPlayerLeft(player);
-        }
+        this.broadcastRoomState();
 
         this.notifyPlayerListChanged();
         this.notifySnapshot();
         this.notifyRoomState();
-        this.broadcastRoomState();
 
         return true;
+    }
+
+
+    scheduleDisconnectRemoval(playerId) {
+        this.clearDisconnectTimer(playerId);
+
+        const timer = setTimeout(() => {
+            this.disconnectTimers.delete(playerId);
+
+            const player = this.world.getPlayer(playerId);
+
+            /*
+             * Если игрок успел вернуться,
+             * удалять его нельзя.
+             */
+            if (!player || player.connected !== false) {
+                return;
+            }
+
+            this.world.removePlayer(playerId);
+
+            this.broadcast(
+                makeMessage(
+                    MESSAGE.PLAYER_LEFT,
+                    {
+                        playerId
+                    }
+                )
+            );
+
+            if (typeof this.onPlayerLeft === "function") {
+                this.onPlayerLeft(player);
+            }
+
+            this.notifyPlayerListChanged();
+            this.notifySnapshot();
+            this.notifyRoomState();
+            this.broadcastRoomState();
+        }, RECONNECT_GRACE_MS);
+
+        this.disconnectTimers.set(
+            playerId,
+            timer
+        );
+    }
+
+
+    clearDisconnectTimer(playerId) {
+        const timer =
+            this.disconnectTimers.get(playerId);
+
+        if (!timer) {
+            return;
+        }
+
+        clearTimeout(timer);
+
+        this.disconnectTimers.delete(
+            playerId
+        );
     }
 
 
@@ -343,11 +639,16 @@ export class GameServer {
        ======================================================== */
 
     broadcastSnapshot() {
-        const snapshot = this.world.snapshot();
-        const message = makeMessage(MESSAGE.SNAPSHOT, {
-            roomCode: this.roomCode,
-            snapshot
-        });
+        const snapshot =
+            this.world.snapshot();
+
+        const message = makeMessage(
+            MESSAGE.SNAPSHOT,
+            {
+                roomCode: this.roomCode,
+                snapshot
+            }
+        );
 
         this.broadcast(message);
 
@@ -359,7 +660,9 @@ export class GameServer {
 
     notifySnapshot() {
         if (typeof this.onSnapshot === "function") {
-            this.onSnapshot(this.world.snapshot());
+            this.onSnapshot(
+                this.world.snapshot()
+            );
         }
     }
 
@@ -369,10 +672,16 @@ export class GameServer {
        ======================================================== */
 
     broadcastRoomState() {
-        const roomState = this.getRoomState();
+        const roomState =
+            this.getRoomState();
 
         this.broadcast(
-            makeMessage(MESSAGE.ROOM_STATE, { roomState })
+            makeMessage(
+                MESSAGE.ROOM_STATE,
+                {
+                    roomState
+                }
+            )
         );
 
         this.notifyRoomState();
@@ -380,29 +689,45 @@ export class GameServer {
 
 
     notifyPlayerListChanged() {
-        if (typeof this.onPlayerListChanged === "function") {
-            this.onPlayerListChanged(this.getPlayers());
+        if (
+            typeof this.onPlayerListChanged ===
+            "function"
+        ) {
+            this.onPlayerListChanged(
+                this.getPlayers()
+            );
         }
     }
 
 
     notifyRoomState() {
-        if (typeof this.onRoomStateChanged === "function") {
-            this.onRoomStateChanged(this.getRoomState());
+        if (
+            typeof this.onRoomStateChanged ===
+            "function"
+        ) {
+            this.onRoomStateChanged(
+                this.getRoomState()
+            );
         }
     }
 
 
     /* ========================================================
-       SEND / BROADCAST
+       SEND
        ======================================================== */
 
     send(connection, message) {
-        if (!connection) return false;
+        if (!connection) {
+            return false;
+        }
 
-        const channel = connection.channel;
+        const channel =
+            connection.channel;
 
-        if (!channel || channel.readyState !== "open") {
+        if (
+            !channel ||
+            channel.readyState !== "open"
+        ) {
             return false;
         }
 
@@ -411,19 +736,41 @@ export class GameServer {
             return true;
         }
         catch (error) {
-            console.error("GameServer.send failed:", error);
+            console.error(
+                "GameServer.send failed:",
+                error
+            );
+
             return false;
         }
     }
 
 
-    broadcast(message, exceptPlayerId = null) {
+    broadcast(
+        message,
+        exceptPlayerId = null
+    ) {
         let sent = 0;
 
-        for (const [playerId, connection] of this.connections) {
-            if (playerId === exceptPlayerId) continue;
+        for (
+            const [
+                playerId,
+                connection
+            ] of this.connections
+        ) {
+            if (
+                playerId ===
+                exceptPlayerId
+            ) {
+                continue;
+            }
 
-            if (this.send(connection, message)) {
+            if (
+                this.send(
+                    connection,
+                    message
+                )
+            ) {
                 sent++;
             }
         }
@@ -435,20 +782,48 @@ export class GameServer {
     sendError(connection, message) {
         this.send(
             connection,
-            makeMessage(MESSAGE.ERROR, { message })
+            makeMessage(
+                MESSAGE.ERROR,
+                {
+                    message
+                }
+            )
         );
     }
 
 
     close() {
-        const connections = [...this.connections.values()];
+        const connections =
+            [...this.connections.values()];
 
         for (const connection of connections) {
             this.disconnect(connection);
         }
 
+        for (
+            const timer
+            of this.disconnectTimers.values()
+        ) {
+            clearTimeout(timer);
+        }
+
+        this.disconnectTimers.clear();
         this.connections.clear();
     }
+}
+
+
+/* ============================================================
+   SERIALIZATION
+   ============================================================ */
+
+function serializePlayer(player) {
+    return {
+        id: player.id,
+        name: player.name,
+        ready: player.ready === true,
+        connected: player.connected !== false
+    };
 }
 
 
@@ -459,4 +834,26 @@ function sanitizeName(name) {
         .slice(0, 24);
 
     return value || "Player";
+}
+
+
+function sanitizeSessionId(value) {
+    const sessionId = String(value ?? "")
+        .trim();
+
+    if (!sessionId) {
+        return null;
+    }
+
+    /*
+     * Ограничиваем размер и допустимые символы.
+     */
+    if (
+        sessionId.length > 128 ||
+        !/^[a-zA-Z0-9_-]+$/.test(sessionId)
+    ) {
+        return null;
+    }
+
+    return sessionId;
 }
