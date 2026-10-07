@@ -9,6 +9,7 @@ const RTC_CONFIG = {
 const JOIN_TIMEOUT_MS = 20000;
 const HEARTBEAT_INTERVAL_MS = 5000;
 const HEARTBEAT_TIMEOUT_MS = 15000;
+const SIGNALING_OPEN_TIMEOUT_MS = 10000;
 
 
 export class HostNetwork {
@@ -169,7 +170,9 @@ export class HostNetwork {
                     "signalingDisconnected",
                     {
                         code: event.code,
-                        reason: event.reason
+                        reason: event.reason,
+                        wasClean: event.wasClean,
+                        readyState: socket.readyState
                     }
                 );
             }
@@ -189,6 +192,19 @@ export class HostNetwork {
             (resolve, reject) => {
                 let settled = false;
 
+                const timer = setTimeout(() => {
+                    finish(
+                        reject,
+                        new Error(
+                            `Signaling WebSocket did not open within ${SIGNALING_OPEN_TIMEOUT_MS / 1000}s: ${endpoint}`
+                        )
+                    );
+                }, SIGNALING_OPEN_TIMEOUT_MS);
+
+                const cleanup = () => {
+                    clearTimeout(timer);
+                };
+
                 const finish = (
                     callback,
                     value
@@ -198,6 +214,7 @@ export class HostNetwork {
                     }
 
                     settled = true;
+                    cleanup();
                     callback(value);
                 };
 
@@ -226,7 +243,7 @@ export class HostNetwork {
                         finish(
                             reject,
                             new Error(
-                                `Signaling server connection failed: ${endpoint}`
+                                `Signaling WebSocket error: ${endpoint} (readyState=${socket.readyState})`
                             )
                         );
                     },
