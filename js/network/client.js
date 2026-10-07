@@ -21,6 +21,7 @@ const RECONNECT_BASE_MS = 1000;
 const RECONNECT_MAX_MS = 10000;
 
 const MAX_RECONNECT_ATTEMPTS = 5;
+const SIGNALING_OPEN_TIMEOUT_MS = 10000;
 
 
 export class ClientNetwork {
@@ -328,7 +329,13 @@ export class ClientNetwork {
                             event.code,
 
                         reason:
-                            event.reason
+                            event.reason,
+
+                        wasClean:
+                            event.wasClean,
+
+                        readyState:
+                            socket.readyState
                     }
                 );
 
@@ -355,8 +362,20 @@ export class ClientNetwork {
 
         await new Promise(
             (resolve, reject) => {
-                let settled =
-                    false;
+                let settled = false;
+
+                const timer = setTimeout(() => {
+                    finish(
+                        reject,
+                        new Error(
+                            `Signaling WebSocket did not open within ${SIGNALING_OPEN_TIMEOUT_MS / 1000}s: ${endpoint}`
+                        )
+                    );
+                }, SIGNALING_OPEN_TIMEOUT_MS);
+
+                const cleanup = () => {
+                    clearTimeout(timer);
+                };
 
                 const finish =
                     (
@@ -371,6 +390,8 @@ export class ClientNetwork {
 
                         settled =
                             true;
+
+                        cleanup();
 
                         callback(
                             value
@@ -411,7 +432,7 @@ export class ClientNetwork {
                         finish(
                             reject,
                             new Error(
-                                `Signaling server connection failed: ${endpoint}`
+                                `Signaling WebSocket error: ${endpoint} (readyState=${socket.readyState})`
                             )
                         );
                     },
